@@ -17,8 +17,10 @@ import urllib.error
 import re
 import time
 import hashlib
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
+from functools import lru_cache
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
@@ -52,9 +54,14 @@ def get_cached(db, cache_key, ttl=CACHE_TTL):
         return json.loads(row[0])
     return None
 
+def _json_default(obj):
+    if isinstance(obj, (set, frozenset)):
+        return list(obj)
+    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+
 def set_cached(db, cache_key, data):
     db.execute("INSERT OR REPLACE INTO cache (cache_key, data, ts) VALUES (?,?,?)",
-               [cache_key, json.dumps(data), time.time()])
+               [cache_key, json.dumps(data, default=_json_default), time.time()])
     db.commit()
 
 # ─── HTTP helper ──────────────────────────────────────────────────────────────
@@ -172,6 +179,7 @@ TEAM_ALIASES = {
     "devils": "new jersey devils",
 }
 
+@lru_cache(maxsize=4096)
 def normalize_name(name):
     """Normalize team/player name for matching."""
     if not name:
@@ -209,6 +217,47 @@ def similarity_score(a, b):
     intersection = tokens_a & tokens_b
     union = tokens_a | tokens_b
     return len(intersection) / len(union)
+
+def similarity_score_from_tokens(tokens_a, tokens_b):
+    """Token overlap similarity from pre-computed token sets (or lists from cache)."""
+    if not tokens_a or not tokens_b:
+        return 0
+    if not isinstance(tokens_a, set):
+        tokens_a = set(tokens_a)
+    if not isinstance(tokens_b, set):
+        tokens_b = set(tokens_b)
+    intersection = tokens_a & tokens_b
+    union = tokens_a | tokens_b
+    return len(intersection) / len(union)
+
+# ─── Sport category helpers ──────────────────────────────────────────────────
+
+SPORT_KEY_TO_CATEGORY = {
+    "basketball_nba": "nba",
+    "americanfootball_nfl": "nfl",
+    "baseball_mlb": "mlb",
+    "icehockey_nhl": "nhl",
+    "soccer_usa_mls": "soccer",
+    "soccer_epl": "soccer",
+    "mma_mixed_martial_arts": "mma",
+}
+
+SPORT_CATEGORY_KEYWORDS = {
+    "nba": ["nba", "basketball"],
+    "nfl": ["nfl", "football", "touchdowns", "yards"],
+    "mlb": ["mlb", "baseball", "runs"],
+    "nhl": ["nhl", "hockey", "stanley cup"],
+    "soccer": ["soccer", "epl", "mls", "premier league"],
+    "mma": ["mma", "ufc"],
+}
+
+def _detect_sport_category(text):
+    """Detect sport category from market text."""
+    text_lower = text.lower()
+    for category, keywords in SPORT_CATEGORY_KEYWORDS.items():
+        if any(kw in text_lower for kw in keywords):
+            return category
+    return None
 
 # ─── Polymarket CLI helpers ───────────────────────────────────────────────────
 
@@ -350,6 +399,8 @@ def fetch_polymarket_sports(db=None):
                 "liquidity": m.get("liquidity", 0),
                 "slug": m.get("slug", ""),
                 "teams": extract_teams_from_text(question),
+                "_tokens": set(normalize_name(question + " " + (m.get("description", "") or "")).split()),
+                "_sport_category": _detect_sport_category(question),
                 "url": f"https://polymarket.com/event/{m.get('slug', '')}" if m.get('slug') else "",
             }
             results.append(entry)
@@ -429,6 +480,8 @@ def fetch_kalshi_sports(db=None):
                 "ticker": m.get("ticker", ""),
                 "event_ticker": m.get("event_ticker", ""),
                 "teams": extract_teams_from_text(m.get("title", "")),
+                "_tokens": set(normalize_name((m.get("title", "") or "") + " " + (m.get("subtitle", "") or "")).split()),
+                "_sport_category": _detect_sport_category((m.get("title", "") or "") + " " + (m.get("event_ticker", "") or "")),
                 "url": f"https://kalshi.com/markets/{m.get('ticker', '').lower()}" if m.get('ticker') else "",
             }
             results.append(entry)
@@ -537,6 +590,8 @@ def fetch_sportsbook_odds(db=None, api_key=""):
                             "decimal_odds": american_to_decimal(price) if price != 0 else 0,
                             "is_prop": is_prop,
                             "teams": [normalize_name(home), normalize_name(away)],
+                            "_tokens": set(normalize_name(away + " " + home + " " + name).split()),
+                            "_sport_category": SPORT_KEY_TO_CATEGORY.get(sport_key, "other"),
                             "event_name": f"{away} @ {home}",
                         }
                         results.append(entry)
@@ -557,14 +612,13 @@ def try_match_prediction_to_sportsbook(pred_market, sportsbook_entries):
     description = pred_market.get("description", "").lower()
     pred_teams = pred_market.get("teams", [])
     full_text = question + " " + description
+    pred_tokens = pred_market.get("_tokens", None)
 
     matches = []
 
     for sb in sportsbook_entries:
         score = 0
         sb_teams = sb.get("teams", [])
-        sb_event = sb.get("event_name", "").lower()
-        sb_outcome = sb.get("outcome_name", "").lower()
 
         # Team matching
         team_matches = 0
@@ -577,8 +631,14 @@ def try_match_prediction_to_sportsbook(pred_market, sportsbook_entries):
         elif team_matches == 1:
             score += 0.3
 
-        # Text similarity
-        text_sim = similarity_score(full_text, sb_event + " " + sb_outcome)
+        # Text similarity (use pre-computed tokens when available)
+        sb_tokens = sb.get("_tokens", None)
+        if pred_tokens is not None and sb_tokens is not None:
+            text_sim = similarity_score_from_tokens(pred_tokens, sb_tokens)
+        else:
+            sb_event = sb.get("event_name", "").lower()
+            sb_outcome = sb.get("outcome_name", "").lower()
+            text_sim = similarity_score(full_text, sb_event + " " + sb_outcome)
         score += text_sim * 0.3
 
         # Player name matching for props
@@ -690,6 +750,13 @@ def find_all_arb_opportunities(prediction_markets, sportsbook_entries, min_net_p
     POLYMARKET_FEE = 0.02  # 2% taker fee on winnings
     SPORTSBOOK_FEE = 0.0  # Built into odds
 
+    # Build team-to-entries index for candidate narrowing
+    team_index = defaultdict(set)
+    for i, sb in enumerate(sportsbook_entries):
+        for team in sb.get("teams", []):
+            if team:
+                team_index[team].add(i)
+
     for pred in prediction_markets:
         source = pred.get("source", "")
         prices = pred.get("prices", [])
@@ -706,8 +773,24 @@ def find_all_arb_opportunities(prediction_markets, sportsbook_entries, min_net_p
 
         pred_fee = POLYMARKET_FEE if source == "polymarket" else KALSHI_FEE
 
+        # Narrow candidates by team index
+        pred_teams = pred.get("teams", [])
+        if pred_teams:
+            candidate_indices = set()
+            for team in pred_teams:
+                candidate_indices.update(team_index.get(team, set()))
+            candidates = [sportsbook_entries[i] for i in candidate_indices]
+        else:
+            candidates = sportsbook_entries  # fallback: no team info
+
+        # Further narrow by sport category
+        pred_sport = pred.get("_sport_category")
+        if pred_sport and candidates is not sportsbook_entries:
+            candidates = [c for c in candidates
+                          if not c.get("_sport_category") or c["_sport_category"] == pred_sport]
+
         # Find matching sportsbook entries
-        matches = try_match_prediction_to_sportsbook(pred, sportsbook_entries)
+        matches = try_match_prediction_to_sportsbook(pred, candidates)
 
         for match in matches:
             sb = match["sportsbook_entry"]
@@ -861,15 +944,32 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
     KALSHI_FEE = 0.012
     POLYMARKET_FEE = 0.02
 
+    # Build team index for Kalshi markets
+    kalshi_team_index = defaultdict(set)
+    for i, km in enumerate(kalshi_markets):
+        for team in km.get("teams", []):
+            if team:
+                kalshi_team_index[team].add(i)
+
     for pm in poly_markets:
         pm_question = pm.get("question", "").lower()
         pm_teams = pm.get("teams", [])
         pm_prices = pm.get("prices", [])
+        pm_tokens = pm.get("_tokens", None)
 
         if len(pm_prices) < 2:
             continue
 
-        for km in kalshi_markets:
+        # Narrow Kalshi candidates by team overlap
+        if pm_teams:
+            candidate_indices = set()
+            for team in pm_teams:
+                candidate_indices.update(kalshi_team_index.get(team, set()))
+            candidates = [kalshi_markets[i] for i in candidate_indices]
+        else:
+            candidates = kalshi_markets
+
+        for km in candidates:
             km_question = km.get("question", "").lower()
             km_teams = km.get("teams", [])
             km_prices = km.get("prices", [])
@@ -879,7 +979,11 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
 
             # Match by teams and text
             team_overlap = len(set(pm_teams) & set(km_teams))
-            text_sim = similarity_score(pm_question, km_question)
+            km_tokens = km.get("_tokens", None)
+            if pm_tokens is not None and km_tokens is not None:
+                text_sim = similarity_score_from_tokens(pm_tokens, km_tokens)
+            else:
+                text_sim = similarity_score(pm_question, km_question)
             score = team_overlap * 0.3 + text_sim * 0.4
 
             if score < 0.35:
@@ -1146,16 +1250,16 @@ def main():
 
     all_opportunities = []
 
-    if demo_mode or not api_key:
-        # Use demo data
+    if demo_mode:
+        # Explicit demo mode only
         all_opportunities = generate_demo_opportunities()
         sources_status = {
             "polymarket": "demo",
             "kalshi": "demo",
-            "sportsbook": "demo" if not api_key else "no_key",
+            "sportsbook": "demo",
         }
     else:
-        # Parallel fetch from all sources
+        # Live fetch — prediction markets always run, sportsbook needs key
         poly_markets = []
         kalshi_markets = []
         sportsbook_entries = []
@@ -1163,7 +1267,7 @@ def main():
         with ThreadPoolExecutor(max_workers=3) as executor:
             future_poly = executor.submit(fetch_polymarket_sports, None)
             future_kalshi = executor.submit(fetch_kalshi_sports, None)
-            future_sb = executor.submit(fetch_sportsbook_odds, None, api_key)
+            future_sb = executor.submit(fetch_sportsbook_odds, None, api_key) if api_key else None
 
             try:
                 poly_markets = future_poly.result(timeout=15)
@@ -1179,12 +1283,13 @@ def main():
                 sources_status["kalshi"] = "error"
                 errors.append(f"Kalshi: {str(e)}")
 
-            try:
-                sportsbook_entries = future_sb.result(timeout=15)
-                sources_status["sportsbook"] = "ok" if sportsbook_entries else "empty"
-            except Exception as e:
-                sources_status["sportsbook"] = "error"
-                errors.append(f"Sportsbook: {str(e)}")
+            if future_sb is not None:
+                try:
+                    sportsbook_entries = future_sb.result(timeout=15)
+                    sources_status["sportsbook"] = "ok" if sportsbook_entries else "empty"
+                except Exception as e:
+                    sources_status["sportsbook"] = "error"
+                    errors.append(f"Sportsbook: {str(e)}")
 
         # Find arbs: prediction markets vs sportsbooks
         if sportsbook_entries:
@@ -1200,7 +1305,7 @@ def main():
             cross_arbs = find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct)
             all_opportunities.extend(cross_arbs)
 
-        # If no live results, fall back to demo
+        # If no live arb results, fall back to demo
         if not all_opportunities:
             all_opportunities = generate_demo_opportunities()
             for s in sources_status:
@@ -1225,7 +1330,7 @@ def main():
             "total_opportunities": len(all_opportunities),
             "sources": sources_status,
             "errors": errors,
-            "is_demo": demo_mode or not api_key or (not any(s == "ok" for s in sources_status.values())),
+            "is_demo": demo_mode or (not any(s == "ok" for s in sources_status.values())),
             "poly_count": len(poly_markets) if 'poly_markets' in dir() else 0,
             "kalshi_count": len(kalshi_markets) if 'kalshi_markets' in dir() else 0,
             "sportsbook_count": len(sportsbook_entries) if 'sportsbook_entries' in dir() else 0,
