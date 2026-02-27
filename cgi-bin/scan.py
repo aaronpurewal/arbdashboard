@@ -1056,173 +1056,6 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
 
     return sorted(opportunities, key=lambda x: x['net_arb_pct'], reverse=True)
 
-# ─── Generate demo data for testing ──────────────────────────────────────────
-
-def generate_demo_opportunities():
-    """Generate realistic demo data when APIs return no results or no API key."""
-    import random
-    random.seed(int(time.time()) // 60)  # Changes every minute
-
-    events = [
-        {
-            "sport": "NBA", "event": "Celtics @ Lakers",
-            "detail": "Boston Celtics vs Los Angeles Lakers - Moneyline",
-            "type": "h2h", "commence": (datetime.now(timezone.utc) + timedelta(hours=random.randint(1, 48))).isoformat(),
-        },
-        {
-            "sport": "NBA", "event": "Nuggets @ Warriors",
-            "detail": "Denver Nuggets vs Golden State Warriors - Total Points Over/Under 224.5",
-            "type": "totals", "commence": (datetime.now(timezone.utc) + timedelta(hours=random.randint(2, 72))).isoformat(),
-        },
-        {
-            "sport": "NBA", "event": "Mavericks @ 76ers",
-            "detail": "Luka Doncic Over 28.5 Points",
-            "type": "player_points", "commence": (datetime.now(timezone.utc) + timedelta(hours=random.randint(1, 24))).isoformat(),
-        },
-        {
-            "sport": "NFL", "event": "Chiefs @ Bills",
-            "detail": "Kansas City Chiefs vs Buffalo Bills - Spread -3.5",
-            "type": "spreads", "commence": (datetime.now(timezone.utc) + timedelta(days=random.randint(1, 7))).isoformat(),
-        },
-        {
-            "sport": "NHL", "event": "Bruins @ Rangers",
-            "detail": "Boston Bruins vs New York Rangers - Moneyline",
-            "type": "h2h", "commence": (datetime.now(timezone.utc) + timedelta(hours=random.randint(3, 48))).isoformat(),
-        },
-        {
-            "sport": "MLB", "event": "Yankees @ Dodgers",
-            "detail": "New York Yankees vs Los Angeles Dodgers - Total Runs Over/Under 8.5",
-            "type": "totals", "commence": (datetime.now(timezone.utc) + timedelta(days=random.randint(1, 5))).isoformat(),
-        },
-        {
-            "sport": "NBA", "event": "Bucks @ Knicks",
-            "detail": "Giannis Antetokounmpo Over 31.5 Points",
-            "type": "player_points", "commence": (datetime.now(timezone.utc) + timedelta(hours=random.randint(4, 36))).isoformat(),
-        },
-        {
-            "sport": "Soccer", "event": "Arsenal @ Liverpool",
-            "detail": "Arsenal vs Liverpool - Match Result",
-            "type": "h2h", "commence": (datetime.now(timezone.utc) + timedelta(days=random.randint(1, 10))).isoformat(),
-        },
-        {
-            "sport": "MMA", "event": "UFC 310 Main Event",
-            "detail": "Fighter A vs Fighter B - Winner",
-            "type": "h2h", "commence": (datetime.now(timezone.utc) + timedelta(days=random.randint(5, 20))).isoformat(),
-        },
-        {
-            "sport": "NBA", "event": "Thunder @ Cavaliers",
-            "detail": "Shai Gilgeous-Alexander Over 30.5 Points",
-            "type": "player_points", "commence": (datetime.now(timezone.utc) + timedelta(hours=random.randint(2, 48))).isoformat(),
-        },
-        {
-            "sport": "NFL", "event": "Eagles @ Cowboys",
-            "detail": "Philadelphia Eagles vs Dallas Cowboys - Moneyline",
-            "type": "h2h", "commence": (datetime.now(timezone.utc) + timedelta(days=random.randint(2, 8))).isoformat(),
-        },
-        {
-            "sport": "NBA", "event": "Heat @ Suns",
-            "detail": "Miami Heat vs Phoenix Suns - Spread +4.5",
-            "type": "spreads", "commence": (datetime.now(timezone.utc) + timedelta(hours=random.randint(6, 48))).isoformat(),
-        },
-    ]
-
-    platforms_a = [
-        ("Polymarket", 0.02), ("Kalshi", 0.012),
-    ]
-    platforms_b = [
-        ("DraftKings", 0), ("FanDuel", 0), ("BetRivers", 0),
-        ("Pinnacle", 0), ("BetMGM", 0),
-    ]
-
-    opportunities = []
-    for i, ev in enumerate(events):
-        pa = platforms_a[random.randint(0, len(platforms_a) - 1)]
-        pb = platforms_b[random.randint(0, len(platforms_b) - 1)]
-
-        # Generate realistic prices that create arb opportunities
-        # For an arb: prob_a + prob_b < 1.0
-        base_prob = random.uniform(0.30, 0.70)
-        arb_margin = random.uniform(0.01, 0.08)  # 1-8% gross arb
-        prob_a = round(base_prob, 4)
-        prob_b = round(1.0 - base_prob - arb_margin, 4)
-
-        if prob_b <= 0.05 or prob_b >= 0.95:
-            continue
-
-        gross_arb = round((1.0 - prob_a - prob_b) * 100, 3)
-        net_cost = (prob_a + (1 - prob_a) * pa[1]) + (prob_b + (1 - prob_b) * pb[1])
-        net_arb = round((1.0 - net_cost) * 100, 3)
-
-        commence = ev["commence"]
-        try:
-            event_time = datetime.fromisoformat(commence.replace("Z", "+00:00"))
-            now = datetime.now(timezone.utc)
-            delta = event_time - now
-            if delta.days > 0:
-                time_display = f"{delta.days}d"
-            elif delta.seconds > 3600:
-                time_display = f"{delta.seconds // 3600}h"
-            else:
-                time_display = f"{delta.seconds // 60}m"
-        except:
-            time_display = ""
-
-        sides = ["Yes", "No"] if random.random() > 0.5 else ["Over", "Under"]
-
-        stakes_a = round(100 * prob_a, 2)
-        stakes_b = round(100 * prob_b, 2)
-
-        opp = {
-            "id": hashlib.md5(f"demo-{i}-{int(time.time()) // 60}".encode()).hexdigest()[:12],
-            "sport": ev["sport"],
-            "event": ev["event"],
-            "event_detail": ev["detail"],
-            "commence_time": commence,
-            "time_display": time_display,
-            "is_live": random.random() < 0.15,
-            "platform_a": {
-                "name": pa[0],
-                "side": sides[0],
-                "price": prob_a,
-                "implied_prob": prob_a,
-                "american_odds": implied_prob_to_american(prob_a),
-                "fee_pct": pa[1] * 100,
-                "url": f"https://{'polymarket.com' if pa[0] == 'Polymarket' else 'kalshi.com'}/markets/demo",
-                "market_id": f"demo_{i}_a",
-            },
-            "platform_b": {
-                "name": pb[0],
-                "side": sides[1],
-                "price": implied_prob_to_american(prob_b),
-                "implied_prob": prob_b,
-                "american_odds": implied_prob_to_american(prob_b),
-                "fee_pct": 0,
-                "url": "",
-                "market_id": f"demo_{i}_b",
-            },
-            "market_type": ev["type"],
-            "gross_arb_pct": gross_arb,
-            "net_arb_pct": net_arb,
-            "stakes": {
-                "stake_a": stakes_a,
-                "stake_b": stakes_b,
-                "total_staked": round(stakes_a + stakes_b, 2),
-                "payout": 100.0,
-                "guaranteed_profit": round(100 - stakes_a - stakes_b, 2),
-            },
-            "match_confidence": round(random.uniform(0.6, 0.98), 2),
-            "resolution_risk": random.choice(["low", "low", "medium"]),
-            "risk_note": "Demo data — connect your API keys for live market scanning",
-            "is_prop": ev["type"].startswith("player"),
-            "liquidity": random.randint(5000, 500000),
-            "volume": random.randint(10000, 2000000),
-        }
-        if opp["is_live"]:
-            opp["time_display"] = "LIVE"
-        opportunities.append(opp)
-
-    return sorted(opportunities, key=lambda x: x["net_arb_pct"], reverse=True)
-
 
 # ─── Main handler ─────────────────────────────────────────────────────────────
 
@@ -1236,7 +1069,6 @@ def main():
 
     min_net_pct = float(params.get("min_pct", "-999"))
     sports_filter = params.get("sports", "").split(",") if params.get("sports") else []
-    demo_mode = params.get("demo", "false").lower() == "true"
 
     api_key = params.get("api_key", "") or get_config(db, "odds_api_key", "")
 
@@ -1249,68 +1081,50 @@ def main():
     }
 
     all_opportunities = []
+    poly_markets = []
+    kalshi_markets = []
+    sportsbook_entries = []
 
-    if demo_mode:
-        # Explicit demo mode only
-        all_opportunities = generate_demo_opportunities()
-        sources_status = {
-            "polymarket": "demo",
-            "kalshi": "demo",
-            "sportsbook": "demo",
-        }
-    else:
-        # Live fetch — prediction markets always run, sportsbook needs key
-        poly_markets = []
-        kalshi_markets = []
-        sportsbook_entries = []
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        future_poly = executor.submit(fetch_polymarket_sports, None)
+        future_kalshi = executor.submit(fetch_kalshi_sports, None)
+        future_sb = executor.submit(fetch_sportsbook_odds, None, api_key) if api_key else None
 
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            future_poly = executor.submit(fetch_polymarket_sports, None)
-            future_kalshi = executor.submit(fetch_kalshi_sports, None)
-            future_sb = executor.submit(fetch_sportsbook_odds, None, api_key) if api_key else None
+        try:
+            poly_markets = future_poly.result(timeout=15)
+            sources_status["polymarket"] = "ok" if poly_markets else "empty"
+        except Exception as e:
+            sources_status["polymarket"] = "error"
+            errors.append(f"Polymarket: {str(e)}")
 
+        try:
+            kalshi_markets = future_kalshi.result(timeout=15)
+            sources_status["kalshi"] = "ok" if kalshi_markets else "empty"
+        except Exception as e:
+            sources_status["kalshi"] = "error"
+            errors.append(f"Kalshi: {str(e)}")
+
+        if future_sb is not None:
             try:
-                poly_markets = future_poly.result(timeout=15)
-                sources_status["polymarket"] = "ok" if poly_markets else "empty"
+                sportsbook_entries = future_sb.result(timeout=15)
+                sources_status["sportsbook"] = "ok" if sportsbook_entries else "empty"
             except Exception as e:
-                sources_status["polymarket"] = "error"
-                errors.append(f"Polymarket: {str(e)}")
+                sources_status["sportsbook"] = "error"
+                errors.append(f"Sportsbook: {str(e)}")
 
-            try:
-                kalshi_markets = future_kalshi.result(timeout=15)
-                sources_status["kalshi"] = "ok" if kalshi_markets else "empty"
-            except Exception as e:
-                sources_status["kalshi"] = "error"
-                errors.append(f"Kalshi: {str(e)}")
+    # Find arbs: prediction markets vs sportsbooks
+    if sportsbook_entries:
+        if poly_markets:
+            arbs1 = find_all_arb_opportunities(poly_markets, sportsbook_entries, min_net_pct)
+            all_opportunities.extend(arbs1)
+        if kalshi_markets:
+            arbs2 = find_all_arb_opportunities(kalshi_markets, sportsbook_entries, min_net_pct)
+            all_opportunities.extend(arbs2)
 
-            if future_sb is not None:
-                try:
-                    sportsbook_entries = future_sb.result(timeout=15)
-                    sources_status["sportsbook"] = "ok" if sportsbook_entries else "empty"
-                except Exception as e:
-                    sources_status["sportsbook"] = "error"
-                    errors.append(f"Sportsbook: {str(e)}")
-
-        # Find arbs: prediction markets vs sportsbooks
-        if sportsbook_entries:
-            if poly_markets:
-                arbs1 = find_all_arb_opportunities(poly_markets, sportsbook_entries, min_net_pct)
-                all_opportunities.extend(arbs1)
-            if kalshi_markets:
-                arbs2 = find_all_arb_opportunities(kalshi_markets, sportsbook_entries, min_net_pct)
-                all_opportunities.extend(arbs2)
-
-        # Find cross-prediction-market arbs
-        if poly_markets and kalshi_markets:
-            cross_arbs = find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct)
-            all_opportunities.extend(cross_arbs)
-
-        # If no live arb results, fall back to demo
-        if not all_opportunities:
-            all_opportunities = generate_demo_opportunities()
-            for s in sources_status:
-                if sources_status[s] in ("ok", "empty"):
-                    sources_status[s] = "ok_no_arbs"
+    # Find cross-prediction-market arbs
+    if poly_markets and kalshi_markets:
+        cross_arbs = find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct)
+        all_opportunities.extend(cross_arbs)
 
     # Apply sports filter
     if sports_filter and sports_filter[0]:
@@ -1330,7 +1144,7 @@ def main():
             "total_opportunities": len(all_opportunities),
             "sources": sources_status,
             "errors": errors,
-            "is_demo": demo_mode or (not any(s == "ok" for s in sources_status.values())),
+            "is_demo": False,
             "poly_count": len(poly_markets) if 'poly_markets' in dir() else 0,
             "kalshi_count": len(kalshi_markets) if 'kalshi_markets' in dir() else 0,
             "sportsbook_count": len(sportsbook_entries) if 'sportsbook_entries' in dir() else 0,

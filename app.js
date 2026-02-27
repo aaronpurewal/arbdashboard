@@ -4,147 +4,6 @@
 
 const CGI_BIN = "cgi-bin";
 
-// ─── Client-side Demo Data Generator ──────────────────────────────────────────
-// Falls back to this when CGI backend is unavailable
-
-function seededRandom(seed) {
-  let s = seed;
-  return function() {
-    s = (s * 16807 + 0) % 2147483647;
-    return (s - 1) / 2147483646;
-  };
-}
-
-function impliedProbToAmerican(prob) {
-  if (prob <= 0 || prob >= 1) return 0;
-  if (prob >= 0.5) return Math.round(-100 * prob / (1 - prob));
-  return Math.round(100 * (1 - prob) / prob);
-}
-
-function generateClientDemoData() {
-  const seed = Math.floor(Date.now() / 60000); // Changes every minute
-  const rng = seededRandom(seed);
-
-  const events = [
-    { sport: "NBA", event: "Celtics @ Lakers", detail: "Boston Celtics vs Los Angeles Lakers - Moneyline", type: "h2h" },
-    { sport: "NBA", event: "Nuggets @ Warriors", detail: "Denver Nuggets vs Golden State Warriors - Total Points O/U 224.5", type: "totals" },
-    { sport: "NBA", event: "Mavericks @ 76ers", detail: "Luka Doncic Over 28.5 Points", type: "player_points" },
-    { sport: "NFL", event: "Chiefs @ Bills", detail: "Kansas City Chiefs vs Buffalo Bills - Spread -3.5", type: "spreads" },
-    { sport: "NHL", event: "Bruins @ Rangers", detail: "Boston Bruins vs New York Rangers - Moneyline", type: "h2h" },
-    { sport: "MLB", event: "Yankees @ Dodgers", detail: "New York Yankees vs Los Angeles Dodgers - Total Runs O/U 8.5", type: "totals" },
-    { sport: "NBA", event: "Bucks @ Knicks", detail: "Giannis Antetokounmpo Over 31.5 Points", type: "player_points" },
-    { sport: "Soccer", event: "Arsenal @ Liverpool", detail: "Arsenal vs Liverpool - Match Result", type: "h2h" },
-    { sport: "MMA", event: "UFC 310 Main Event", detail: "Fighter A vs Fighter B - Winner", type: "h2h" },
-    { sport: "NBA", event: "Thunder @ Cavaliers", detail: "Shai Gilgeous-Alexander Over 30.5 Points", type: "player_points" },
-    { sport: "NFL", event: "Eagles @ Cowboys", detail: "Philadelphia Eagles vs Dallas Cowboys - Moneyline", type: "h2h" },
-    { sport: "NBA", event: "Heat @ Suns", detail: "Miami Heat vs Phoenix Suns - Spread +4.5", type: "spreads" },
-  ];
-
-  const platformsA = [
-    { name: "Polymarket", fee: 0.02 },
-    { name: "Kalshi", fee: 0.012 },
-  ];
-  const platformsB = [
-    { name: "DraftKings", fee: 0 },
-    { name: "FanDuel", fee: 0 },
-    { name: "BetRivers", fee: 0 },
-    { name: "Pinnacle", fee: 0 },
-    { name: "BetMGM", fee: 0 },
-  ];
-
-  const opps = [];
-  for (let i = 0; i < events.length; i++) {
-    const ev = events[i];
-    const pa = platformsA[Math.floor(rng() * platformsA.length)];
-    const pb = platformsB[Math.floor(rng() * platformsB.length)];
-
-    const baseProb = 0.30 + rng() * 0.40;
-    const arbMargin = 0.01 + rng() * 0.07;
-    const probA = parseFloat(baseProb.toFixed(4));
-    const probB = parseFloat((1.0 - baseProb - arbMargin).toFixed(4));
-
-    if (probB <= 0.05 || probB >= 0.95) continue;
-
-    const grossArb = parseFloat(((1.0 - probA - probB) * 100).toFixed(3));
-    const netCost = (probA + (1 - probA) * pa.fee) + (probB + (1 - probB) * pb.fee);
-    const netArb = parseFloat(((1.0 - netCost) * 100).toFixed(3));
-
-    const hoursAhead = 1 + Math.floor(rng() * 168);
-    const commence = new Date(Date.now() + hoursAhead * 3600000).toISOString();
-    const days = Math.floor(hoursAhead / 24);
-    const hours = hoursAhead % 24;
-    const timeDisplay = days > 0 ? `${days}d` : `${hours}h`;
-    const isLive = rng() < 0.15;
-    const sides = rng() > 0.5 ? ["Yes", "No"] : ["Over", "Under"];
-
-    const stakeA = parseFloat((100 * probA).toFixed(2));
-    const stakeB = parseFloat((100 * probB).toFixed(2));
-
-    opps.push({
-      id: (seed * 1000 + i).toString(16).slice(-12),
-      sport: ev.sport,
-      event: ev.event,
-      event_detail: ev.detail,
-      commence_time: commence,
-      time_display: isLive ? "LIVE" : timeDisplay,
-      is_live: isLive,
-      platform_a: {
-        name: pa.name,
-        side: sides[0],
-        price: probA,
-        implied_prob: probA,
-        american_odds: impliedProbToAmerican(probA),
-        fee_pct: pa.fee * 100,
-        url: pa.name === "Polymarket" ? "https://polymarket.com" : "https://kalshi.com",
-        market_id: `demo_${i}_a`,
-      },
-      platform_b: {
-        name: pb.name,
-        side: sides[1],
-        price: impliedProbToAmerican(probB),
-        implied_prob: probB,
-        american_odds: impliedProbToAmerican(probB),
-        fee_pct: 0,
-        url: "",
-        market_id: `demo_${i}_b`,
-      },
-      market_type: ev.type,
-      gross_arb_pct: grossArb,
-      net_arb_pct: netArb,
-      stakes: {
-        stake_a: stakeA,
-        stake_b: stakeB,
-        total_staked: parseFloat((stakeA + stakeB).toFixed(2)),
-        payout: 100.0,
-        guaranteed_profit: parseFloat((100 - stakeA - stakeB).toFixed(2)),
-      },
-      match_confidence: parseFloat((0.6 + rng() * 0.38).toFixed(2)),
-      resolution_risk: rng() < 0.3 ? "medium" : "low",
-      risk_note: "Demo data — connect your API keys for live market scanning",
-      is_prop: ev.type.startsWith("player"),
-      liquidity: Math.floor(5000 + rng() * 495000),
-      volume: Math.floor(10000 + rng() * 1990000),
-    });
-  }
-
-  opps.sort((a, b) => b.net_arb_pct - a.net_arb_pct);
-
-  return {
-    opportunities: opps,
-    meta: {
-      scan_time: 0.1,
-      timestamp: new Date().toISOString(),
-      total_opportunities: opps.length,
-      sources: { polymarket: "demo", kalshi: "demo", sportsbook: "demo" },
-      errors: [],
-      is_demo: true,
-      poly_count: 0,
-      kalshi_count: 0,
-      sportsbook_count: 0,
-    },
-  };
-}
-
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
   opportunities: [],
@@ -261,7 +120,6 @@ function escapeHtml(s) {
 async function fetchScan() {
   const params = new URLSearchParams();
   if (state.config.odds_api_key) params.set("api_key", state.config.odds_api_key);
-  if (!state.config.odds_api_key) params.set("demo", "true");
   const minPct = parseFloat(document.getElementById("minProfitSlider").value) || 0;
   if (minPct > 0) params.set("min_pct", minPct.toString());
 
@@ -686,7 +544,7 @@ function updateStats() {
 
 function updateSourceStatus(sources) {
   if (!sources) return;
-  const statusMap = { ok: "ok", empty: "stale", error: "error", no_key: "no_key", pending: "pending", demo: "demo", ok_no_arbs: "ok" };
+  const statusMap = { ok: "ok", empty: "stale", error: "error", no_key: "no_key", pending: "pending", ok_no_arbs: "ok" };
 
   for (const [key, status] of Object.entries(sources)) {
     const dotId = `status${key.charAt(0).toUpperCase() + key.slice(1)}`;
@@ -711,14 +569,7 @@ async function runScan() {
   btn.textContent = "⟳ SCANNING...";
 
   try {
-    let data;
-    try {
-      data = await fetchScan();
-    } catch (fetchErr) {
-      // CGI backend unavailable — use client-side demo data
-      console.log("CGI backend unavailable, using client-side demo data:", fetchErr.message);
-      data = generateClientDemoData();
-    }
+    const data = await fetchScan();
 
     state.opportunities = data.opportunities || [];
     state.meta = data.meta || {};
@@ -726,13 +577,8 @@ async function runScan() {
     // Update source status
     updateSourceStatus(data.meta?.sources);
 
-    // Show/hide demo banner
-    const demoBanner = document.getElementById("demoBanner");
-    if (data.meta?.is_demo) {
-      demoBanner.classList.remove("hidden");
-    } else {
-      demoBanner.classList.add("hidden");
-    }
+    // Hide demo banner (always live mode)
+    document.getElementById("demoBanner").classList.add("hidden");
 
     // Check for new high-value opportunities
     const newHighValue = state.opportunities.filter(o =>
@@ -889,9 +735,6 @@ function setupEventListeners() {
   document.getElementById("settingsModal").addEventListener("click", (e) => {
     if (e.target === document.getElementById("settingsModal")) closeSettings();
   });
-
-  // Demo banner link
-  document.getElementById("demoBannerLink").addEventListener("click", openSettings);
 
   // Filters
   const filterInputs = document.querySelectorAll(".sidebar input, .sidebar select");
