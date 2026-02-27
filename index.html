@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ARBSCANNER — Prediction Market Arbitrage Monitor</title>
+  <link rel="stylesheet" href="./style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+</head>
+<body>
+  <div class="app-container">
+
+    <!-- ═══ TOP BAR ═══ -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <div>
+          <div class="logo">⚡ ARBSCANNER</div>
+          <div class="logo-sub">Prediction Market × Sportsbook Arb Monitor</div>
+        </div>
+      </div>
+
+      <div class="topbar-center" id="statusBadges">
+        <div class="status-badge">
+          <span class="status-dot pending" id="statusPoly"></span>
+          <span>Polymarket</span>
+        </div>
+        <div class="status-badge">
+          <span class="status-dot pending" id="statusKalshi"></span>
+          <span>Kalshi</span>
+        </div>
+        <div class="status-badge">
+          <span class="status-dot pending" id="statusSportsbook"></span>
+          <span>Sportsbook</span>
+        </div>
+      </div>
+
+      <div class="topbar-right">
+        <div class="scan-timer" id="scanTimer">
+          Next scan: <span class="countdown" id="countdown">--</span>
+        </div>
+        <button class="btn btn-primary" id="btnRefresh" title="Scan now">
+          ↻ SCAN
+        </button>
+        <button class="btn btn-icon" id="btnSettings" title="Settings">
+          ⚙
+        </button>
+      </div>
+    </header>
+
+    <!-- ═══ MAIN CONTENT ═══ -->
+    <div class="main-content">
+
+      <!-- ─── Sidebar ─── -->
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-section">
+          <h3>Sports</h3>
+          <div class="filter-group" id="sportFilters">
+            <div class="filter-toggle"><input type="checkbox" id="fNBA" checked><label for="fNBA">NBA</label></div>
+            <div class="filter-toggle"><input type="checkbox" id="fNFL" checked><label for="fNFL">NFL</label></div>
+            <div class="filter-toggle"><input type="checkbox" id="fMLB" checked><label for="fMLB">MLB</label></div>
+            <div class="filter-toggle"><input type="checkbox" id="fNHL" checked><label for="fNHL">NHL</label></div>
+            <div class="filter-toggle"><input type="checkbox" id="fSoccer" checked><label for="fSoccer">Soccer</label></div>
+            <div class="filter-toggle"><input type="checkbox" id="fMMA" checked><label for="fMMA">MMA</label></div>
+          </div>
+        </div>
+
+        <div class="sidebar-section">
+          <h3>Platforms</h3>
+          <div class="filter-group" id="platformFilters">
+            <div class="filter-toggle"><input type="checkbox" id="fPolymarket" checked><label for="fPolymarket">Polymarket</label></div>
+            <div class="filter-toggle"><input type="checkbox" id="fKalshi" checked><label for="fKalshi">Kalshi</label></div>
+            <div class="filter-toggle"><input type="checkbox" id="fDraftKings" checked><label for="fDraftKings">DraftKings</label></div>
+            <div class="filter-toggle"><input type="checkbox" id="fFanDuel" checked><label for="fFanDuel">FanDuel</label></div>
+            <div class="filter-toggle"><input type="checkbox" id="fBetRivers" checked><label for="fBetRivers">BetRivers</label></div>
+            <div class="filter-toggle"><input type="checkbox" id="fPinnacle" checked><label for="fPinnacle">Pinnacle</label></div>
+            <div class="filter-toggle"><input type="checkbox" id="fBetMGM" checked><label for="fBetMGM">BetMGM</label></div>
+          </div>
+        </div>
+
+        <div class="sidebar-section">
+          <h3>Min Net Profit</h3>
+          <div class="range-input">
+            <input type="range" id="minProfitSlider" min="0" max="10" step="0.5" value="0">
+            <div class="range-label">
+              <span>0%</span>
+              <span class="range-value" id="minProfitValue">0%</span>
+              <span>10%</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="sidebar-section">
+          <h3>Market Type</h3>
+          <div class="filter-group">
+            <div class="filter-toggle"><input type="checkbox" id="fMoneyline" checked><label for="fMoneyline">Moneyline</label></div>
+            <div class="filter-toggle"><input type="checkbox" id="fSpreads" checked><label for="fSpreads">Spreads</label></div>
+            <div class="filter-toggle"><input type="checkbox" id="fTotals" checked><label for="fTotals">Totals</label></div>
+            <div class="filter-toggle"><input type="checkbox" id="fProps" checked><label for="fProps">Player Props</label></div>
+          </div>
+        </div>
+
+        <div class="sidebar-section">
+          <h3>Options</h3>
+          <div class="filter-group">
+            <div class="filter-toggle"><input type="checkbox" id="fIncludeLive" checked><label for="fIncludeLive">Include live events</label></div>
+          </div>
+        </div>
+
+        <div class="sidebar-section">
+          <h3>Sort By</h3>
+          <select id="sortSelect">
+            <option value="net_pct">Net Profit %</option>
+            <option value="gross_pct">Gross Profit %</option>
+            <option value="time">Time to Event</option>
+            <option value="liquidity">Liquidity</option>
+            <option value="confidence">Match Confidence</option>
+          </select>
+        </div>
+      </aside>
+
+      <!-- ─── Dashboard ─── -->
+      <main class="dashboard" id="dashboard">
+
+        <!-- Stats Bar -->
+        <div class="stats-bar" id="statsBar">
+          <div class="stat-card">
+            <div class="stat-label">Opportunities</div>
+            <div class="stat-value green" id="statOpps">--</div>
+            <div class="stat-sub" id="statOppsSub">scanning...</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Best Net Arb</div>
+            <div class="stat-value green" id="statBestArb">--%</div>
+            <div class="stat-sub" id="statBestArbSub">--</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Avg Net Profit</div>
+            <div class="stat-value" id="statAvgProfit">--%</div>
+            <div class="stat-sub">across all opportunities</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Scan Time</div>
+            <div class="stat-value blue" id="statScanTime">--s</div>
+            <div class="stat-sub" id="statLastScan">--</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Events Scanned</div>
+            <div class="stat-value" id="statEvents">--</div>
+            <div class="stat-sub" id="statEventsSub">across all sources</div>
+          </div>
+        </div>
+
+        <!-- Demo Banner -->
+        <div class="demo-banner" id="demoBanner">
+          <span class="banner-icon">ℹ</span>
+          <span>
+            Running in <strong>demo mode</strong> with simulated data.
+            <a id="demoBannerLink">Configure your API keys</a> to scan live markets.
+          </span>
+        </div>
+
+        <!-- Table -->
+        <div class="table-wrapper" style="position: relative;">
+          <div class="loading-overlay" id="loadingOverlay">
+            <div class="spinner"></div>
+          </div>
+
+          <div class="table-header-bar">
+            <span class="table-title">Arbitrage Opportunities</span>
+            <span class="table-count" id="tableCount">0 results</span>
+          </div>
+
+          <div class="table-scroll">
+            <table id="arbTable">
+              <thead>
+                <tr>
+                  <th class="col-sport" data-sort="sport">Sport <span class="sort-arrow"></span></th>
+                  <th class="col-event" data-sort="event">Event <span class="sort-arrow"></span></th>
+                  <th class="col-time" data-sort="time">Time <span class="sort-arrow"></span></th>
+                  <th class="col-platform" data-sort="platform_a">Platform A <span class="sort-arrow"></span></th>
+                  <th class="col-side">Side</th>
+                  <th class="col-odds">Odds A</th>
+                  <th class="col-platform" data-sort="platform_b">Platform B <span class="sort-arrow"></span></th>
+                  <th class="col-side">Side</th>
+                  <th class="col-odds">Odds B</th>
+                  <th class="col-gross" data-sort="gross">Gross % <span class="sort-arrow"></span></th>
+                  <th class="col-net" data-sort="net">Net % <span class="sort-arrow"></span></th>
+                  <th class="col-risk">Risk</th>
+                  <th class="col-action">Action</th>
+                </tr>
+              </thead>
+              <tbody id="arbTableBody">
+              </tbody>
+            </table>
+
+            <div class="empty-state" id="emptyState" style="display: none;">
+              <div class="icon">⚡</div>
+              <div class="title">No arbitrage opportunities found</div>
+              <div class="subtitle">Adjust your filters or wait for the next scan. Markets are constantly moving.</div>
+            </div>
+          </div>
+        </div>
+
+      </main>
+    </div>
+
+    <!-- ═══ FOOTER ═══ -->
+    <footer class="app-footer">
+      <div class="footer-stats">
+        <span>Today: <span class="value" id="footerToday">0 opps</span></span>
+        <span>Avg: <span class="value" id="footerAvg">--%</span></span>
+        <span>Best: <span class="value" id="footerBest">--%</span></span>
+      </div>
+      <div class="footer-disclaimer">
+        For informational and educational purposes only. This tool does not constitute financial, gambling, or investment advice. Cross-platform arbitrage involves risks including but not limited to: differing resolution criteria, settlement delays, platform counterparty risk, liquidity constraints, and regulatory restrictions. Prediction markets may not be available in all jurisdictions. Always read the full contract/market rules on each platform before placing any trades.
+      </div>
+    </footer>
+
+  </div>
+
+  <!-- ═══ SETTINGS MODAL ═══ -->
+  <div class="modal-overlay" id="settingsModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>⚙ Configuration</h2>
+        <button class="modal-close" id="modalClose">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="inputOddsApiKey">The Odds API Key</label>
+          <input type="password" id="inputOddsApiKey" placeholder="Enter your API key...">
+          <div class="hint">Get a free key at <a href="https://the-odds-api.com" target="_blank" rel="noopener noreferrer">the-odds-api.com</a> (500 credits/month)</div>
+        </div>
+        <div class="form-group">
+          <label for="inputOddsPapiKey">OddsPapi API Key (optional)</label>
+          <input type="password" id="inputOddsPapiKey" placeholder="Optional unified API key...">
+          <div class="hint">Covers Polymarket + Kalshi + 350 sportsbooks. <a href="https://oddspapi.io" target="_blank" rel="noopener noreferrer">oddspapi.io</a></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="inputRefreshInterval">Refresh Interval</label>
+            <select id="inputRefreshInterval">
+              <option value="30">30 seconds</option>
+              <option value="60" selected>1 minute</option>
+              <option value="120">2 minutes</option>
+              <option value="300">5 minutes</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="inputDefaultBankroll">Default Bankroll ($)</label>
+            <input type="number" id="inputDefaultBankroll" value="100" min="1" step="1">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="inputNotifyThreshold">Notify Above Net %</label>
+            <input type="number" id="inputNotifyThreshold" value="2" min="0" max="20" step="0.5">
+          </div>
+          <div class="form-group">
+            <label for="inputSoundAlerts">Sound Alerts</label>
+            <select id="inputSoundAlerts">
+              <option value="false">Off</option>
+              <option value="true">On</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" id="modalCancel">Cancel</button>
+        <button class="btn btn-primary" id="modalSave">Save Config</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ TOAST CONTAINER ═══ -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="./app.js"></script>
+</body>
+</html>
