@@ -24,7 +24,8 @@ from functools import lru_cache
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data.db")
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DB_PATH = os.path.join(_PROJECT_ROOT, "data.db") if os.access(_PROJECT_ROOT, os.W_OK) else "/tmp/data.db"
 CACHE_TTL = 60  # seconds
 
 # ─── Database helpers ─────────────────────────────────────────────────────────
@@ -1057,20 +1058,18 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
     return sorted(opportunities, key=lambda x: x['net_arb_pct'], reverse=True)
 
 
-# ─── Main handler ─────────────────────────────────────────────────────────────
+# ─── Core scan logic (callable from CGI or Vercel handler) ───────────────────
 
-def main():
-    print("Content-Type: application/json")
-    print()
-
+def run_scan(params):
+    """Run the full scan and return the response dict."""
     db = get_db()
-    query_string = os.environ.get("QUERY_STRING", "")
-    params = dict(urllib.parse.parse_qsl(query_string))
 
     min_net_pct = float(params.get("min_pct", "-999"))
     sports_filter = params.get("sports", "").split(",") if params.get("sports") else []
 
-    api_key = params.get("api_key", "") or get_config(db, "odds_api_key", "")
+    api_key = (params.get("api_key", "")
+               or os.environ.get("ODDS_API_KEY", "")
+               or get_config(db, "odds_api_key", ""))
 
     scan_start = time.time()
     errors = []
@@ -1136,7 +1135,7 @@ def main():
 
     scan_duration = round(time.time() - scan_start, 2)
 
-    response = {
+    return {
         "opportunities": all_opportunities,
         "meta": {
             "scan_time": scan_duration,
@@ -1145,13 +1144,20 @@ def main():
             "sources": sources_status,
             "errors": errors,
             "is_demo": False,
-            "poly_count": len(poly_markets) if 'poly_markets' in dir() else 0,
-            "kalshi_count": len(kalshi_markets) if 'kalshi_markets' in dir() else 0,
-            "sportsbook_count": len(sportsbook_entries) if 'sportsbook_entries' in dir() else 0,
+            "poly_count": len(poly_markets),
+            "kalshi_count": len(kalshi_markets),
+            "sportsbook_count": len(sportsbook_entries),
         }
     }
 
-    print(json.dumps(response))
+# ─── CGI entry point (for local development) ─────────────────────────────────
+
+def main():
+    print("Content-Type: application/json")
+    print()
+    query_string = os.environ.get("QUERY_STRING", "")
+    params = dict(urllib.parse.parse_qsl(query_string))
+    print(json.dumps(run_scan(params), default=_json_default))
 
 if __name__ == "__main__":
     main()

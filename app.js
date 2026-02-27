@@ -2,7 +2,7 @@
    ArbScanner — Frontend Application Logic
    ═══════════════════════════════════════════════════════════════════════════ */
 
-const CGI_BIN = "cgi-bin";
+const API_BASE = "/api";
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -123,7 +123,7 @@ async function fetchScan() {
   const minPct = parseFloat(document.getElementById("minProfitSlider").value) || 0;
   if (minPct > 0) params.set("min_pct", minPct.toString());
 
-  const url = `${CGI_BIN}/scan.py?${params.toString()}`;
+  const url = `${API_BASE}/scan?${params.toString()}`;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const data = await resp.json();
@@ -144,7 +144,7 @@ async function fetchDetail(opp, bankroll) {
     fee_b: (opp.platform_b.fee_pct / 100).toString(),
   });
 
-  const url = `${CGI_BIN}/detail.py?${params.toString()}`;
+  const url = `${API_BASE}/detail?${params.toString()}`;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`Detail fetch failed: ${resp.status}`);
   return resp.json();
@@ -152,7 +152,7 @@ async function fetchDetail(opp, bankroll) {
 
 async function loadConfig() {
   try {
-    const url = `${CGI_BIN}/config.py`;
+    const url = `${API_BASE}/config`;
     const resp = await fetch(url);
     if (resp.ok) {
       const text = await resp.text();
@@ -172,7 +172,7 @@ async function loadConfig() {
 
 async function saveConfig(configData) {
   try {
-    const url = `${CGI_BIN}/config.py`;
+    const url = `${API_BASE}/config`;
     await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

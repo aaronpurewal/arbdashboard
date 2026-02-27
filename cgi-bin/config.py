@@ -11,7 +11,8 @@ import sqlite3
 import urllib.parse
 from datetime import datetime, timezone
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data.db")
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DB_PATH = os.path.join(_PROJECT_ROOT, "data.db") if os.access(_PROJECT_ROOT, os.W_OK) else "/tmp/data.db"
 
 def get_db():
     db = sqlite3.connect(DB_PATH)
