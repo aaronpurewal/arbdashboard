@@ -9,6 +9,8 @@ import json
 import os
 import sys
 import sqlite3
+import subprocess
+import shutil
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -27,6 +29,7 @@ CACHE_TTL = 60  # seconds
 
 def get_db():
     db = sqlite3.connect(DB_PATH)
+    db.execute("PRAGMA journal_mode=WAL")
     db.execute("""CREATE TABLE IF NOT EXISTS config (
         key TEXT PRIMARY KEY,
         value TEXT
@@ -207,40 +210,93 @@ def similarity_score(a, b):
     union = tokens_a | tokens_b
     return len(intersection) / len(union)
 
+# ─── Polymarket CLI helpers ───────────────────────────────────────────────────
+
+def _polymarket_cli_available():
+    """Check if the polymarket CLI tool is installed."""
+    return shutil.which("polymarket") is not None
+
+SPORT_KEYWORDS = frozenset([
+    "nba", "nfl", "mlb", "nhl", "soccer", "football", "basketball",
+    "baseball", "hockey", "mma", "ufc", "tennis", "points", "rebounds",
+    "assists", "touchdowns", "goals", "runs", "yards",
+    "over", "under", "spread", "moneyline",
+])
+
+def _fetch_polymarket_via_cli():
+    """
+    Fetch all active Polymarket markets via CLI in a single call,
+    then filter for sports client-side.
+
+    Returns a list of raw market dicts (same shape as Gamma API),
+    or None if the CLI call fails.
+    """
+    try:
+        result = subprocess.run(
+            ["polymarket", "-o", "json", "markets", "list",
+             "--active", "true", "--closed", "false", "--limit", "500"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            return None
+        all_markets = json.loads(result.stdout)
+        if not isinstance(all_markets, list):
+            return None
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
+        return None
+
+    sports_markets = _filter_sports_markets(all_markets)
+    return sports_markets
+
+def _filter_sports_markets(markets):
+    """Filter a list of raw market dicts to only sports-related ones."""
+    filtered = []
+    for m in markets:
+        title = (m.get("question", "") + " " + m.get("description", "")
+                 + " " + " ".join(m.get("tags") or [])).lower()
+        if any(kw in title for kw in SPORT_KEYWORDS):
+            filtered.append(m)
+    return filtered
+
 # ─── Data fetchers ────────────────────────────────────────────────────────────
 
-def fetch_polymarket_sports(db):
+def fetch_polymarket_sports(db=None):
     """Fetch sports markets from Polymarket Gamma API."""
+    if db is None:
+        db = get_db()
     cache_key = "polymarket_sports"
     cached = get_cached(db, cache_key)
     if cached is not None:
         return cached
 
-    markets = []
-    # Try multiple sport tags
-    sport_tags = ["sports", "nba", "nfl", "mlb", "nhl", "soccer", "football", "basketball", "baseball", "hockey", "mma", "ufc"]
+    # Try CLI first (single call), fall back to sequential HTTP
+    markets = None
+    if _polymarket_cli_available():
+        markets = _fetch_polymarket_via_cli()
 
-    for tag in sport_tags:
-        url = f"https://gamma-api.polymarket.com/markets?tag={tag}&closed=false&limit=100"
+    if markets is None:
+        # HTTP fallback: original 13-call approach
+        markets = []
+        sport_tags = ["sports", "nba", "nfl", "mlb", "nhl", "soccer", "football",
+                      "basketball", "baseball", "hockey", "mma", "ufc"]
+
+        for tag in sport_tags:
+            url = f"https://gamma-api.polymarket.com/markets?tag={tag}&closed=false&limit=100"
+            data = fetch_json(url)
+            if isinstance(data, list):
+                markets.extend(data)
+            elif isinstance(data, dict) and not data.get("_error"):
+                if "markets" in data:
+                    markets.extend(data["markets"])
+
+        # Also try without tag filter and search for sports keywords
+        url = "https://gamma-api.polymarket.com/markets?closed=false&limit=200&active=true"
         data = fetch_json(url)
         if isinstance(data, list):
-            markets.extend(data)
-        elif isinstance(data, dict) and not data.get("_error"):
-            if "markets" in data:
-                markets.extend(data["markets"])
-
-    # Also try without tag filter and search for sports keywords
-    url = "https://gamma-api.polymarket.com/markets?closed=false&limit=200&active=true"
-    data = fetch_json(url)
-    if isinstance(data, list):
-        for m in data:
-            title = (m.get("question", "") + " " + m.get("description", "")).lower()
-            sport_keywords = ["nba", "nfl", "mlb", "nhl", "soccer", "football", "basketball",
-                            "baseball", "hockey", "mma", "ufc", "tennis", "points", "rebounds",
-                            "assists", "touchdowns", "goals", "runs", "yards",
-                            "over", "under", "spread", "moneyline"]
-            if any(kw in title for kw in sport_keywords):
-                markets.append(m)
+            for m in data:
+                title = (m.get("question", "") + " " + m.get("description", "")).lower()
+                if any(kw in title for kw in SPORT_KEYWORDS):
+                    markets.append(m)
 
     # Deduplicate by condition_id
     seen = set()
@@ -260,6 +316,17 @@ def fetch_polymarket_sports(db):
             outcome_prices = m.get("outcomePrices", [])
             tokens = m.get("clobTokenIds", [])
 
+            # Parse JSON-encoded strings from Gamma API
+            if isinstance(outcomes, str):
+                try: outcomes = json.loads(outcomes)
+                except (json.JSONDecodeError, ValueError): outcomes = []
+            if isinstance(outcome_prices, str):
+                try: outcome_prices = json.loads(outcome_prices)
+                except (json.JSONDecodeError, ValueError): outcome_prices = []
+            if isinstance(tokens, str):
+                try: tokens = json.loads(tokens)
+                except (json.JSONDecodeError, ValueError): tokens = []
+
             if not outcomes or not outcome_prices:
                 continue
 
@@ -275,9 +342,9 @@ def fetch_polymarket_sports(db):
                 "id": m.get("conditionId") or m.get("condition_id") or m.get("id", ""),
                 "question": question,
                 "description": m.get("description", ""),
-                "outcomes": outcomes if isinstance(outcomes, list) else json.loads(outcomes) if isinstance(outcomes, str) else [],
+                "outcomes": outcomes,
                 "prices": prices,
-                "tokens": tokens if isinstance(tokens, list) else json.loads(tokens) if isinstance(tokens, str) else [],
+                "tokens": tokens,
                 "end_date": m.get("endDate") or m.get("end_date_iso", ""),
                 "volume": m.get("volume", 0),
                 "liquidity": m.get("liquidity", 0),
@@ -292,8 +359,10 @@ def fetch_polymarket_sports(db):
     set_cached(db, cache_key, results)
     return results
 
-def fetch_kalshi_sports(db):
+def fetch_kalshi_sports(db=None):
     """Fetch sports/event markets from Kalshi."""
+    if db is None:
+        db = get_db()
     cache_key = "kalshi_sports"
     cached = get_cached(db, cache_key)
     if cached is not None:
@@ -369,8 +438,10 @@ def fetch_kalshi_sports(db):
     set_cached(db, cache_key, results)
     return results
 
-def fetch_sportsbook_odds(db, api_key):
+def fetch_sportsbook_odds(db=None, api_key=""):
     """Fetch odds from The Odds API for major sports."""
+    if db is None:
+        db = get_db()
     cache_key = "sportsbook_odds"
     cached = get_cached(db, cache_key)
     if cached is not None:
@@ -391,32 +462,38 @@ def fetch_sportsbook_odds(db, api_key):
 
     bookmakers = "draftkings,fanduel,betrivers,betmgm,pinnacle,williamhill_us,bovada"
     all_events = []
-    remaining_credits = None
 
-    for sport in sports_to_fetch:
+    def _fetch_sport(sport, is_prop=False):
+        """Fetch a single sport from The Odds API. Thread-safe (no shared state)."""
+        if is_prop:
+            markets_param = "player_points,player_rebounds,player_assists,player_threes"
+        else:
+            markets_param = "h2h,spreads,totals"
         url = (f"https://api.the-odds-api.com/v4/sports/{sport}/odds?"
-               f"apiKey={api_key}&regions=us&markets=h2h,spreads,totals"
+               f"apiKey={api_key}&regions=us&markets={markets_param}"
                f"&bookmakers={bookmakers}&oddsFormat=american")
         data = fetch_json(url)
-        if isinstance(data, dict) and data.get("_error"):
-            continue
+        events = []
         if isinstance(data, list):
             for event in data:
                 event["_sport_key"] = sport
-            all_events.extend(data)
+                if is_prop:
+                    event["_is_prop"] = True
+                events.append(event)
+        return events
 
-    # Also try player props for NBA
-    for sport in ["basketball_nba"]:
-        prop_markets = "player_points,player_rebounds,player_assists,player_threes"
-        url = (f"https://api.the-odds-api.com/v4/sports/{sport}/odds?"
-               f"apiKey={api_key}&regions=us&markets={prop_markets}"
-               f"&bookmakers={bookmakers}&oddsFormat=american")
-        data = fetch_json(url)
-        if isinstance(data, list):
-            for event in data:
-                event["_sport_key"] = sport
-                event["_is_prop"] = True
-            all_events.extend(data)
+    # Fire all 8 requests in parallel (7 sports + 1 NBA props)
+    fetch_tasks = [(sport, False) for sport in sports_to_fetch]
+    fetch_tasks.append(("basketball_nba", True))  # NBA player props
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [pool.submit(_fetch_sport, sport, is_prop)
+                   for sport, is_prop in fetch_tasks]
+        for future in as_completed(futures):
+            try:
+                all_events.extend(future.result(timeout=12))
+            except Exception:
+                continue
 
     # Parse into normalized format
     results = []
@@ -1084,9 +1161,9 @@ def main():
         sportsbook_entries = []
 
         with ThreadPoolExecutor(max_workers=3) as executor:
-            future_poly = executor.submit(fetch_polymarket_sports, db)
-            future_kalshi = executor.submit(fetch_kalshi_sports, db)
-            future_sb = executor.submit(fetch_sportsbook_odds, db, api_key)
+            future_poly = executor.submit(fetch_polymarket_sports, None)
+            future_kalshi = executor.submit(fetch_kalshi_sports, None)
+            future_sb = executor.submit(fetch_sportsbook_odds, None, api_key)
 
             try:
                 poly_markets = future_poly.result(timeout=15)
