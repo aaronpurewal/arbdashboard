@@ -779,16 +779,28 @@ def try_match_prediction_to_sportsbook(pred_market, sportsbook_entries):
         score = 0
         sb_teams = sb.get("teams", [])
 
-        # Team matching
+        # Team matching — count how many prediction teams appear in sportsbook teams
         team_matches = 0
         for pt in pred_teams:
             for st in sb_teams:
                 if pt and st and (pt in st or st in pt):
                     team_matches += 1
+                    break  # count each pred team at most once
+
+        # For game winner / h2h markets, BOTH teams must match
+        # This prevents "Chicago at Utah" matching "Chicago vs Colorado"
+        is_game_market = ("winner" in question or "win" in question
+                          or sb.get("market_type") == "h2h")
+        if is_game_market and len(pred_teams) >= 2:
+            if team_matches < 2:
+                continue  # skip — wrong game
+
         if team_matches >= 2:
             score += 0.6
         elif team_matches == 1:
             score += 0.3
+        else:
+            continue  # no team overlap at all — skip
 
         # Text similarity (use pre-computed tokens when available)
         sb_tokens = sb.get("_tokens", None)
@@ -961,131 +973,126 @@ def find_all_arb_opportunities(prediction_markets, sportsbook_entries, min_net_p
             if sb_prob <= 0 or sb_prob >= 1:
                 continue
 
-            # Scenario 1: Prediction YES + Sportsbook opposing side
-            # If prediction market has YES at yes_price, and sportsbook has
-            # the opposing side at sb_prob
-            arb1 = compute_arb_binary(yes_price, sb_prob, pred_fee, SPORTSBOOK_FEE)
+            # Determine side alignment: is sportsbook on the same side as
+            # prediction YES or prediction NO?
+            # Use price proximity: sb_prob closer to yes_price = same side,
+            # closer to no_price = opposite side.
+            diff_yes = abs(yes_price - sb_prob)
+            diff_no = abs(no_price - sb_prob)
 
-            # Scenario 2: Prediction NO + Sportsbook same side
-            arb2 = compute_arb_binary(no_price, 1 - sb_prob, pred_fee, SPORTSBOOK_FEE)
+            if diff_yes <= diff_no:
+                # sb is same side as prediction YES → arb: pred NO + sb
+                arb = compute_arb_binary(no_price, sb_prob, pred_fee, SPORTSBOOK_FEE)
+                pred_side = outcomes[1] if len(outcomes) > 1 else "No"
+                pred_price = no_price
+            else:
+                # sb is same side as prediction NO → arb: pred YES + sb
+                arb = compute_arb_binary(yes_price, sb_prob, pred_fee, SPORTSBOOK_FEE)
+                pred_side = outcomes[0] if outcomes else "Yes"
+                pred_price = yes_price
 
-            for arb, scenario in [(arb1, "pred_yes_sb_no"), (arb2, "pred_no_sb_yes")]:
-                if arb is None:
-                    continue
-                if arb["gross_arb_pct"] <= 0:
-                    continue
-                if arb["net_arb_pct"] < min_net_pct:
-                    continue
+            sb_side = sb.get("outcome_name", "")
+            sb_price_display = sb.get("american_odds", 0)
 
-                if scenario == "pred_yes_sb_no":
-                    pred_side = outcomes[0] if outcomes else "Yes"
-                    pred_price = yes_price
-                    sb_side = sb.get("outcome_name", "")
-                    sb_price_display = sb.get("american_odds", 0)
-                else:
-                    pred_side = outcomes[1] if len(outcomes) > 1 else "No"
-                    pred_price = no_price
-                    sb_side = sb.get("outcome_name", "")
-                    sb_price_display = sb.get("american_odds", 0)
+            if arb is None or arb["gross_arb_pct"] <= 0:
+                continue
+            if arb["net_arb_pct"] < min_net_pct:
+                continue
 
-                # Determine sport
-                sport = sb.get("sport", "").replace("_", " ").upper()
-                if "nba" in sport.lower() or "basketball" in sport.lower():
-                    sport_display = "NBA"
-                elif "nfl" in sport.lower() or "football" in sport.lower():
-                    sport_display = "NFL"
-                elif "mlb" in sport.lower() or "baseball" in sport.lower():
-                    sport_display = "MLB"
-                elif "nhl" in sport.lower() or "hockey" in sport.lower():
-                    sport_display = "NHL"
-                elif "soccer" in sport.lower() or "mls" in sport.lower() or "epl" in sport.lower():
-                    sport_display = "Soccer"
-                elif "mma" in sport.lower() or "ufc" in sport.lower():
-                    sport_display = "MMA"
-                else:
-                    sport_display = sport[:10] if sport else "Sports"
+            # Determine sport
+            sport = sb.get("sport", "").replace("_", " ").upper()
+            if "nba" in sport.lower() or "basketball" in sport.lower():
+                sport_display = "NBA"
+            elif "nfl" in sport.lower() or "football" in sport.lower():
+                sport_display = "NFL"
+            elif "mlb" in sport.lower() or "baseball" in sport.lower():
+                sport_display = "MLB"
+            elif "nhl" in sport.lower() or "hockey" in sport.lower():
+                sport_display = "NHL"
+            elif "soccer" in sport.lower() or "mls" in sport.lower() or "epl" in sport.lower():
+                sport_display = "Soccer"
+            elif "mma" in sport.lower() or "ufc" in sport.lower():
+                sport_display = "MMA"
+            else:
+                sport_display = sport[:10] if sport else "Sports"
 
-                stakes = compute_stake_allocation(
-                    pred_price if scenario == "pred_yes_sb_no" else no_price,
-                    sb_prob if scenario == "pred_yes_sb_no" else (1 - sb_prob),
-                    100  # $100 default
-                )
+            stakes = compute_stake_allocation(pred_price, sb_prob, 100)
 
-                # Time sensitivity
-                commence = sb.get("commence_time", "")
-                is_live = False
-                time_display = ""
-                if commence:
-                    try:
-                        event_time = datetime.fromisoformat(commence.replace("Z", "+00:00"))
-                        now = datetime.now(timezone.utc)
-                        if event_time < now:
-                            is_live = True
-                            time_display = "LIVE"
+            # Time sensitivity
+            commence = sb.get("commence_time", "")
+            is_live = False
+            time_display = ""
+            if commence:
+                try:
+                    event_time = datetime.fromisoformat(commence.replace("Z", "+00:00"))
+                    now = datetime.now(timezone.utc)
+                    if event_time < now:
+                        is_live = True
+                        time_display = "LIVE"
+                    else:
+                        delta = event_time - now
+                        if delta.days > 0:
+                            time_display = f"{delta.days}d"
+                        elif delta.seconds > 3600:
+                            time_display = f"{delta.seconds // 3600}h"
                         else:
-                            delta = event_time - now
-                            if delta.days > 0:
-                                time_display = f"{delta.days}d"
-                            elif delta.seconds > 3600:
-                                time_display = f"{delta.seconds // 3600}h"
-                            else:
-                                time_display = f"{delta.seconds // 60}m"
-                    except Exception:
-                        time_display = ""
+                            time_display = f"{delta.seconds // 60}m"
+                except Exception:
+                    time_display = ""
 
-                # Resolution risk
+            # Resolution risk
+            resolution_risk = "low"
+            risk_note = ""
+            if confidence < 0.6:
+                resolution_risk = "high"
+                risk_note = "Low match confidence — verify markets reference the same event and conditions"
+            elif confidence < 0.8:
+                resolution_risk = "medium"
+                risk_note = "Moderate match confidence — check resolution criteria on both platforms"
+            elif source != "sportsbook":
                 resolution_risk = "low"
-                risk_note = ""
-                if confidence < 0.6:
-                    resolution_risk = "high"
-                    risk_note = "Low match confidence — verify markets reference the same event and conditions"
-                elif confidence < 0.8:
-                    resolution_risk = "medium"
-                    risk_note = "Moderate match confidence — check resolution criteria on both platforms"
-                elif source != "sportsbook":
-                    resolution_risk = "low"
-                    risk_note = "Different platforms may use different data sources for settlement"
+                risk_note = "Different platforms may use different data sources for settlement"
 
-                opp = {
-                    "id": hashlib.md5(f"{pred.get('id','')}-{sb.get('bookmaker','')}-{sb.get('outcome_name','')}-{scenario}".encode()).hexdigest()[:12],
-                    "sport": sport_display,
-                    "event": sb.get("event_name", pred.get("question", "")[:60]),
-                    "event_detail": pred.get("question", ""),
-                    "commence_time": commence,
-                    "time_display": time_display,
-                    "is_live": is_live,
-                    "platform_a": {
-                        "name": source.capitalize(),
-                        "side": pred_side,
-                        "price": round(pred_price, 4),
-                        "implied_prob": round(pred_price, 4),
-                        "american_odds": implied_prob_to_american(pred_price),
-                        "fee_pct": pred_fee * 100,
-                        "url": pred.get("url", ""),
-                        "market_id": pred.get("id", ""),
-                    },
-                    "platform_b": {
-                        "name": sb.get("bookmaker_title", sb.get("bookmaker", "")),
-                        "side": sb_side,
-                        "price": sb_price_display,
-                        "implied_prob": round(sb_prob, 4),
-                        "american_odds": sb.get("american_odds", 0),
-                        "fee_pct": 0,
-                        "url": "",
-                        "market_id": "",
-                    },
-                    "market_type": sb.get("market_type", "h2h"),
-                    "gross_arb_pct": arb["gross_arb_pct"],
-                    "net_arb_pct": arb["net_arb_pct"],
-                    "stakes": stakes,
-                    "match_confidence": round(confidence, 2),
-                    "resolution_risk": resolution_risk,
-                    "risk_note": risk_note,
-                    "is_prop": sb.get("is_prop", False),
-                    "liquidity": pred.get("liquidity", 0),
-                    "volume": pred.get("volume", 0),
-                }
-                opportunities.append(opp)
+            opp = {
+                "id": hashlib.md5(f"{pred.get('id','')}-{sb.get('bookmaker','')}-{sb.get('outcome_name','')}-{pred_side}".encode()).hexdigest()[:12],
+                "sport": sport_display,
+                "event": sb.get("event_name", pred.get("question", "")[:60]),
+                "event_detail": pred.get("question", ""),
+                "commence_time": commence,
+                "time_display": time_display,
+                "is_live": is_live,
+                "platform_a": {
+                    "name": source.capitalize(),
+                    "side": pred_side,
+                    "price": round(pred_price, 4),
+                    "implied_prob": round(pred_price, 4),
+                    "american_odds": implied_prob_to_american(pred_price),
+                    "fee_pct": pred_fee * 100,
+                    "url": pred.get("url", ""),
+                    "market_id": pred.get("id", ""),
+                },
+                "platform_b": {
+                    "name": sb.get("bookmaker_title", sb.get("bookmaker", "")),
+                    "side": sb_side,
+                    "price": sb_price_display,
+                    "implied_prob": round(sb_prob, 4),
+                    "american_odds": sb.get("american_odds", 0),
+                    "fee_pct": 0,
+                    "url": "",
+                    "market_id": "",
+                },
+                "market_type": sb.get("market_type", "h2h"),
+                "gross_arb_pct": arb["gross_arb_pct"],
+                "net_arb_pct": arb["net_arb_pct"],
+                "stakes": stakes,
+                "match_confidence": round(confidence, 2),
+                "resolution_risk": resolution_risk,
+                "risk_note": risk_note,
+                "is_prop": sb.get("is_prop", False),
+                "liquidity": pred.get("liquidity", 0),
+                "volume": pred.get("volume", 0),
+            }
+            opportunities.append(opp)
 
     # Deduplicate: keep best arb per unique event+platforms pair
     seen = {}
@@ -1140,6 +1147,14 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
 
             # Match by teams and text
             team_overlap = len(set(pm_teams) & set(km_teams))
+
+            # For game winner markets, require both teams to match
+            is_game = ("winner" in pm_question or "win" in pm_question
+                       or "winner" in km_question or "win" in km_question)
+            if is_game and len(pm_teams) >= 2 and len(km_teams) >= 2:
+                if team_overlap < 2:
+                    continue
+
             km_tokens = km.get("_tokens", None)
             if pm_tokens is not None and km_tokens is not None:
                 text_sim = similarity_score_from_tokens(pm_tokens, km_tokens)
@@ -1150,70 +1165,76 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
             if score < 0.35:
                 continue
 
-            # Check: Poly YES + Kalshi NO
-            arb1 = compute_arb_binary(pm_prices[0], km_prices[1], POLYMARKET_FEE, KALSHI_FEE)
-            # Check: Poly NO + Kalshi YES
-            arb2 = compute_arb_binary(pm_prices[1], km_prices[0], POLYMARKET_FEE, KALSHI_FEE)
+            # Determine if Poly YES and Kalshi YES are the same outcome
+            # using price proximity
+            pm_yes, pm_no = pm_prices[0], pm_prices[1]
+            km_yes, km_no = km_prices[0], km_prices[1]
 
-            for arb, scenario in [(arb1, "poly_yes_kalshi_no"), (arb2, "poly_no_kalshi_yes")]:
-                if arb is None or arb["gross_arb_pct"] <= 0:
-                    continue
-                if arb["net_arb_pct"] < min_net_pct:
-                    continue
+            diff_aligned = abs(pm_yes - km_yes)
+            diff_misaligned = abs(pm_yes - km_no)
 
-                if scenario == "poly_yes_kalshi_no":
-                    pa_side = pm.get("outcomes", ["Yes"])[0]
-                    pa_price = pm_prices[0]
-                    pb_side = km.get("outcomes", ["", "No"])[1]
-                    pb_price = km_prices[1]
-                else:
-                    pa_side = pm.get("outcomes", ["", "No"])[1]
-                    pa_price = pm_prices[1]
-                    pb_side = km.get("outcomes", ["Yes"])[0]
-                    pb_price = km_prices[0]
+            if diff_aligned <= diff_misaligned:
+                # Aligned: PM YES ≈ KM YES → arb: PM YES + KM NO
+                arb = compute_arb_binary(pm_yes, km_no, POLYMARKET_FEE, KALSHI_FEE)
+                pa_side = pm.get("outcomes", ["Yes"])[0]
+                pa_price = pm_yes
+                pb_side = km.get("outcomes", ["", "No"])[1]
+                pb_price = km_no
+            else:
+                # Misaligned: PM YES ≈ KM NO → arb: PM YES + KM YES
+                arb = compute_arb_binary(pm_yes, km_yes, POLYMARKET_FEE, KALSHI_FEE)
+                pa_side = pm.get("outcomes", ["Yes"])[0]
+                pa_price = pm_yes
+                pb_side = km.get("outcomes", ["Yes"])[0]
+                pb_price = km_yes
 
-                stakes = compute_stake_allocation(pa_price, pb_price, 100)
+            if arb is None or arb["gross_arb_pct"] <= 0:
+                continue
+            if arb["net_arb_pct"] < min_net_pct:
+                continue
 
-                opp = {
-                    "id": hashlib.md5(f"cross-{pm.get('id','')}-{km.get('id','')}-{scenario}".encode()).hexdigest()[:12],
-                    "sport": "Sports",
-                    "event": pm.get("question", "")[:60],
-                    "event_detail": pm.get("question", ""),
-                    "commence_time": "",
-                    "time_display": "",
-                    "is_live": False,
-                    "platform_a": {
-                        "name": "Polymarket",
-                        "side": pa_side,
-                        "price": round(pa_price, 4),
-                        "implied_prob": round(pa_price, 4),
-                        "american_odds": implied_prob_to_american(pa_price),
-                        "fee_pct": POLYMARKET_FEE * 100,
-                        "url": pm.get("url", ""),
-                        "market_id": pm.get("id", ""),
-                    },
-                    "platform_b": {
-                        "name": "Kalshi",
-                        "side": pb_side,
-                        "price": round(pb_price, 4),
-                        "implied_prob": round(pb_price, 4),
-                        "american_odds": implied_prob_to_american(pb_price),
-                        "fee_pct": KALSHI_FEE * 100,
-                        "url": km.get("url", ""),
-                        "market_id": km.get("id", ""),
-                    },
-                    "market_type": "binary",
-                    "gross_arb_pct": arb["gross_arb_pct"],
-                    "net_arb_pct": arb["net_arb_pct"],
-                    "stakes": stakes,
-                    "match_confidence": round(score, 2),
-                    "resolution_risk": "medium" if score < 0.6 else "low",
-                    "risk_note": "Cross-platform prediction market arb — verify both markets resolve on the same criteria",
-                    "is_prop": False,
-                    "liquidity": pm.get("liquidity", 0),
-                    "volume": pm.get("volume", 0),
-                }
-                opportunities.append(opp)
+            stakes = compute_stake_allocation(pa_price, pb_price, 100)
+
+            opp = {
+                "id": hashlib.md5(f"cross-{pm.get('id','')}-{km.get('id','')}-{pa_side}".encode()).hexdigest()[:12],
+                "sport": "Sports",
+                "event": pm.get("question", "")[:60],
+                "event_detail": pm.get("question", ""),
+                "commence_time": "",
+                "time_display": "",
+                "is_live": False,
+                "platform_a": {
+                    "name": "Polymarket",
+                    "side": pa_side,
+                    "price": round(pa_price, 4),
+                    "implied_prob": round(pa_price, 4),
+                    "american_odds": implied_prob_to_american(pa_price),
+                    "fee_pct": POLYMARKET_FEE * 100,
+                    "url": pm.get("url", ""),
+                    "market_id": pm.get("id", ""),
+                },
+                "platform_b": {
+                    "name": "Kalshi",
+                    "side": pb_side,
+                    "price": round(pb_price, 4),
+                    "implied_prob": round(pb_price, 4),
+                    "american_odds": implied_prob_to_american(pb_price),
+                    "fee_pct": KALSHI_FEE * 100,
+                    "url": km.get("url", ""),
+                    "market_id": km.get("id", ""),
+                },
+                "market_type": "binary",
+                "gross_arb_pct": arb["gross_arb_pct"],
+                "net_arb_pct": arb["net_arb_pct"],
+                "stakes": stakes,
+                "match_confidence": round(score, 2),
+                "resolution_risk": "medium" if score < 0.6 else "low",
+                "risk_note": "Cross-platform prediction market arb — verify both markets resolve on the same criteria",
+                "is_prop": False,
+                "liquidity": pm.get("liquidity", 0),
+                "volume": pm.get("volume", 0),
+            }
+            opportunities.append(opp)
 
     return sorted(opportunities, key=lambda x: x['net_arb_pct'], reverse=True)
 
