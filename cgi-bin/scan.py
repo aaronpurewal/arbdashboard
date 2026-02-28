@@ -592,7 +592,8 @@ def fetch_kalshi_sports(db=None):
                 mkts.append((m, category))
         return mkts
 
-    with ThreadPoolExecutor(max_workers=16) as pool:
+    # Kalshi Basic tier: 20 reads/sec — 5 workers avoids throttling
+    with ThreadPoolExecutor(max_workers=5) as pool:
         futures = [pool.submit(_fetch_series_markets, t, c) for t, c in all_series]
         for future in as_completed(futures):
             try:
