@@ -178,6 +178,50 @@ TEAM_ALIASES = {
     "kraken": "seattle kraken", "blue jackets": "columbus blue jackets",
     "ducks": "anaheim ducks", "sharks": "san jose sharks",
     "devils": "new jersey devils",
+    # City-name aliases (for Kalshi-style titles like "Denver at Oklahoma City")
+    # NBA
+    "los angeles l": "los angeles lakers", "los angeles c": "la clippers",
+    "boston": "boston celtics", "golden state": "golden state warriors",
+    "new york": "new york knicks", "brooklyn": "brooklyn nets",
+    "philadelphia": "philadelphia 76ers", "miami": "miami heat",
+    "milwaukee": "milwaukee bucks", "phoenix": "phoenix suns",
+    "dallas": "dallas mavericks", "denver": "denver nuggets",
+    "oklahoma city": "oklahoma city thunder", "memphis": "memphis grizzlies",
+    "cleveland": "cleveland cavaliers", "minnesota": "minnesota timberwolves",
+    "sacramento": "sacramento kings", "new orleans": "new orleans pelicans",
+    "atlanta": "atlanta hawks", "chicago": "chicago bulls",
+    "toronto": "toronto raptors", "orlando": "orlando magic",
+    "indiana": "indiana pacers", "charlotte": "charlotte hornets",
+    "washington": "washington wizards", "detroit": "detroit pistons",
+    "portland": "portland trail blazers", "san antonio": "san antonio spurs",
+    "houston": "houston rockets", "utah": "utah jazz",
+    # NFL (city names that don't collide with NBA above)
+    "kansas city": "kansas city chiefs", "buffalo": "buffalo bills",
+    "baltimore": "baltimore ravens", "san francisco": "san francisco 49ers",
+    "cincinnati": "cincinnati bengals", "pittsburgh": "pittsburgh steelers",
+    "green bay": "green bay packers", "seattle": "seattle seahawks",
+    "jacksonville": "jacksonville jaguars", "las vegas": "las vegas raiders",
+    "carolina": "carolina panthers", "tennessee": "tennessee titans",
+    "new england": "new england patriots",
+    # NHL (city names that don't collide above)
+    "edmonton": "edmonton oilers", "colorado": "colorado avalanche",
+    "vancouver": "vancouver canucks", "tampa bay": "tampa bay lightning",
+    "calgary": "calgary flames", "nashville": "nashville predators",
+    "ottawa": "ottawa senators", "columbus": "columbus blue jackets",
+    "anaheim": "anaheim ducks", "san jose": "san jose sharks",
+    "new jersey": "new jersey devils", "winnipeg": "winnipeg jets",
+    "vegas": "vegas golden knights",
+    # EPL
+    "liverpool": "liverpool", "manchester city": "manchester city",
+    "manchester united": "manchester united", "arsenal": "arsenal",
+    "chelsea": "chelsea", "tottenham": "tottenham",
+    "aston villa": "aston villa", "nottingham": "nottingham forest",
+    "fulham": "fulham", "brentford": "brentford",
+    "brighton": "brighton", "crystal palace": "crystal palace",
+    "wolves": "wolverhampton", "everton": "everton",
+    "west ham": "west ham", "bournemouth": "bournemouth",
+    "leicester": "leicester city", "southampton": "southampton",
+    "ipswich": "ipswich town",
 }
 
 @lru_cache(maxsize=4096)
@@ -470,8 +514,58 @@ def fetch_polymarket_sports(db=None):
     set_cached(db, cache_key, results)
     return results
 
+KALSHI_SPORTS_SERIES = {
+    # (series_ticker, sport_category)
+    "nba": [
+        ("KXNBAGAME", "nba"),       # Game winners
+        ("KXNBASPREAD", "nba"),      # Spreads
+        ("KXNBATOTAL", "nba"),       # Totals
+        ("KXNBAPTS", "nba"),         # Player points
+        ("KXNBA1HTOTAL", "nba"),     # 1st half totals
+    ],
+    "nfl": [
+        ("KXNFLGAME", "nfl"),
+        ("KXNFLSPREAD", "nfl"),
+        ("KXNFLTOTAL", "nfl"),
+    ],
+    "mlb": [
+        ("KXMLBGAME", "mlb"),
+        ("KXMLBSPREAD", "mlb"),
+    ],
+    "nhl": [
+        ("KXNHLGAME", "nhl"),
+        ("KXNHLSPREAD", "nhl"),
+    ],
+    "mma": [
+        ("KXUFCFIGHT", "mma"),
+        ("KXMMAGAME", "mma"),
+    ],
+    "soccer": [
+        ("KXEPLGAME", "soccer"),
+        ("KXEPLTOTAL", "soccer"),
+        ("KXMLSGAME", "soccer"),
+    ],
+}
+
+
+def _kalshi_parse_price(m):
+    """Parse Kalshi market prices (in cents 0-100) to probabilities (0-1)."""
+    yes_price = m.get("yes_bid", 0) or m.get("last_price", 0) or 0
+    no_price = m.get("no_bid", 0) or 0
+    if yes_price == 0 and no_price == 0:
+        yes_price = m.get("yes_ask", 0) or 0
+        no_price = m.get("no_ask", 0) or 0
+    yes_prob = yes_price / 100.0 if yes_price > 1 else float(yes_price)
+    no_prob = no_price / 100.0 if no_price > 1 else float(no_price)
+    if yes_prob == 0 and no_prob > 0:
+        yes_prob = 1.0 - no_prob
+    elif no_prob == 0 and yes_prob > 0:
+        no_prob = 1.0 - yes_prob
+    return yes_prob, no_prob
+
+
 def fetch_kalshi_sports(db=None):
-    """Fetch sports/event markets from Kalshi."""
+    """Fetch sports markets from Kalshi via series → markets API."""
     if db is None:
         db = get_db()
     cache_key = "kalshi_sports"
@@ -479,58 +573,45 @@ def fetch_kalshi_sports(db=None):
     if cached is not None:
         return cached
 
-    markets = []
-    # Kalshi uses event tickers — fetch open markets
-    url = "https://api.elections.kalshi.com/trade-api/v2/markets?status=open&limit=200"
-    data = fetch_json(url)
+    # Collect all series tickers with their sport categories
+    all_series = []
+    for sport, series_list in KALSHI_SPORTS_SERIES.items():
+        for ticker, category in series_list:
+            all_series.append((ticker, category))
 
-    if isinstance(data, dict) and "markets" in data:
-        raw_markets = data["markets"]
-    elif isinstance(data, list):
-        raw_markets = data
-    else:
-        raw_markets = []
+    # Fetch markets for all series in parallel (skip events step)
+    raw_markets = []  # (market_dict, sport_category)
 
-    strong_kw = ["nba", "nfl", "mlb", "nhl", "soccer", "football", "basketball",
-                  "baseball", "hockey", "mma", "ufc", "tennis", "super bowl",
-                  "world series", "stanley cup", "march madness"]
+    def _fetch_series_markets(series_ticker, category):
+        url = (f"https://api.elections.kalshi.com/trade-api/v2/markets"
+               f"?series_ticker={series_ticker}&status=open&limit=200")
+        data = fetch_json(url)
+        mkts = []
+        if isinstance(data, dict) and "markets" in data:
+            for m in data["markets"]:
+                mkts.append((m, category))
+        return mkts
 
-    results = []
-    for m in raw_markets:
-        try:
-            title = (m.get("title", "") + " " + m.get("subtitle", "") + " " +
-                     m.get("event_ticker", "") + " " + m.get("category", "")).lower()
-
-            if not (any(kw in title for kw in strong_kw) or extract_teams_from_text(title)):
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        futures = [pool.submit(_fetch_series_markets, t, c) for t, c in all_series]
+        for future in as_completed(futures):
+            try:
+                raw_markets.extend(future.result(timeout=10))
+            except Exception:
                 continue
 
-            yes_price = m.get("yes_bid", 0) or m.get("last_price", 0) or 0
-            no_price = m.get("no_bid", 0) or 0
-            if yes_price == 0 and no_price == 0:
-                yes_price = m.get("yes_ask", 0) or 0
-                no_price = m.get("no_ask", 0) or 0
-
-            # Kalshi prices are in cents (0-100) or decimals (0-1)
-            if isinstance(yes_price, (int, float)) and yes_price > 1:
-                yes_prob = yes_price / 100.0
-            else:
-                yes_prob = float(yes_price)
-
-            if isinstance(no_price, (int, float)) and no_price > 1:
-                no_prob = no_price / 100.0
-            else:
-                no_prob = float(no_price)
-
-            if yes_prob == 0 and no_prob > 0:
-                yes_prob = 1.0 - no_prob
-            elif no_prob == 0 and yes_prob > 0:
-                no_prob = 1.0 - yes_prob
+    # Normalize into standard format
+    results = []
+    for m, category in raw_markets:
+        try:
+            title = m.get("title", "")
+            yes_prob, no_prob = _kalshi_parse_price(m)
 
             entry = {
                 "source": "kalshi",
                 "id": m.get("ticker", ""),
-                "question": m.get("title", "") or m.get("subtitle", ""),
-                "description": m.get("subtitle", "") or m.get("title", ""),
+                "question": title,
+                "description": m.get("subtitle", "") or title,
                 "outcomes": ["Yes", "No"],
                 "prices": [yes_prob, no_prob],
                 "end_date": m.get("expiration_time", "") or m.get("close_time", ""),
@@ -538,9 +619,9 @@ def fetch_kalshi_sports(db=None):
                 "liquidity": m.get("open_interest", 0),
                 "ticker": m.get("ticker", ""),
                 "event_ticker": m.get("event_ticker", ""),
-                "teams": extract_teams_from_text(m.get("title", "")),
-                "_tokens": set(normalize_name((m.get("title", "") or "") + " " + (m.get("subtitle", "") or "")).split()),
-                "_sport_category": _detect_sport_category((m.get("title", "") or "") + " " + (m.get("event_ticker", "") or "")),
+                "teams": extract_teams_from_text(title),
+                "_tokens": set(normalize_name(title).split()),
+                "_sport_category": category,
                 "url": f"https://kalshi.com/markets/{m.get('ticker', '').lower()}" if m.get('ticker') else "",
             }
             results.append(entry)
@@ -666,7 +747,7 @@ def fetch_sportsbook_odds(db=None, api_key=""):
                             "implied_prob": imp_prob,
                             "decimal_odds": american_to_decimal(price) if price != 0 else 0,
                             "is_prop": is_prop,
-                            "teams": [normalize_name(home), normalize_name(away)],
+                            "teams": extract_teams_from_text(home + " " + away),
                             "_tokens": set(normalize_name(away + " " + home + " " + name).split()),
                             "_sport_category": SPORT_KEY_TO_CATEGORY.get(sport_key, "other"),
                             "event_name": f"{away} @ {home}",
