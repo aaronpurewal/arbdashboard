@@ -252,12 +252,53 @@ SPORT_CATEGORY_KEYWORDS = {
     "mma": ["mma", "ufc"],
 }
 
+# Map full team names to sport categories
+TEAM_TO_SPORT = {}
+_nba_teams = {"los angeles lakers", "boston celtics", "golden state warriors", "new york knicks",
+    "brooklyn nets", "philadelphia 76ers", "miami heat", "milwaukee bucks", "phoenix suns",
+    "dallas mavericks", "denver nuggets", "la clippers", "los angeles clippers",
+    "oklahoma city thunder", "memphis grizzlies", "cleveland cavaliers", "minnesota timberwolves",
+    "sacramento kings", "new orleans pelicans", "atlanta hawks", "chicago bulls", "toronto raptors",
+    "orlando magic", "indiana pacers", "charlotte hornets", "washington wizards", "detroit pistons",
+    "portland trail blazers", "san antonio spurs", "houston rockets", "utah jazz"}
+_nfl_teams = {"kansas city chiefs", "philadelphia eagles", "buffalo bills", "baltimore ravens",
+    "detroit lions", "san francisco 49ers", "dallas cowboys", "miami dolphins", "cincinnati bengals",
+    "pittsburgh steelers", "green bay packers", "houston texans", "seattle seahawks",
+    "los angeles rams", "los angeles chargers", "jacksonville jaguars", "minnesota vikings",
+    "indianapolis colts", "new orleans saints", "chicago bears", "denver broncos",
+    "las vegas raiders", "arizona cardinals", "atlanta falcons", "washington commanders",
+    "carolina panthers", "new york giants", "new york jets", "cleveland browns",
+    "new england patriots", "tennessee titans"}
+_mlb_teams = {"new york yankees", "los angeles dodgers", "houston astros", "atlanta braves",
+    "new york mets", "philadelphia phillies", "san diego padres", "chicago cubs", "boston red sox",
+    "toronto blue jays", "cleveland guardians", "baltimore orioles", "minnesota twins",
+    "seattle mariners", "texas rangers", "tampa bay rays", "milwaukee brewers",
+    "arizona diamondbacks", "pittsburgh pirates", "cincinnati reds", "chicago white sox",
+    "kansas city royals", "colorado rockies", "los angeles angels", "detroit tigers",
+    "washington nationals", "miami marlins", "oakland athletics"}
+_nhl_teams = {"boston bruins", "toronto maple leafs", "edmonton oilers", "colorado avalanche",
+    "carolina hurricanes", "minnesota wild", "vancouver canucks", "dallas stars",
+    "pittsburgh penguins", "tampa bay lightning", "chicago blackhawks", "detroit red wings",
+    "calgary flames", "nashville predators", "washington capitals", "ottawa senators",
+    "buffalo sabres", "new york islanders", "philadelphia flyers", "utah hockey club",
+    "seattle kraken", "columbus blue jackets", "anaheim ducks", "san jose sharks",
+    "new jersey devils"}
+for t in _nba_teams: TEAM_TO_SPORT[t] = "nba"
+for t in _nfl_teams: TEAM_TO_SPORT[t] = "nfl"
+for t in _mlb_teams: TEAM_TO_SPORT[t] = "mlb"
+for t in _nhl_teams: TEAM_TO_SPORT[t] = "nhl"
+
 def _detect_sport_category(text):
-    """Detect sport category from market text."""
+    """Detect sport category from text keywords or team names."""
     text_lower = text.lower()
     for category, keywords in SPORT_CATEGORY_KEYWORDS.items():
         if any(kw in text_lower for kw in keywords):
             return category
+    # Fall back to team name detection
+    teams = extract_teams_from_text(text)
+    for team in teams:
+        if team in TEAM_TO_SPORT:
+            return TEAM_TO_SPORT[team]
     return None
 
 # ─── Polymarket CLI helpers ───────────────────────────────────────────────────
@@ -266,12 +307,17 @@ def _polymarket_cli_available():
     """Check if the polymarket CLI tool is installed."""
     return shutil.which("polymarket") is not None
 
-SPORT_KEYWORDS = frozenset([
+# Strong keywords: league/sport names — one match is enough
+_STRONG_SPORT_KW = frozenset([
     "nba", "nfl", "mlb", "nhl", "soccer", "football", "basketball",
-    "baseball", "hockey", "mma", "ufc", "tennis", "points", "rebounds",
-    "assists", "touchdowns", "goals", "runs", "yards",
+    "baseball", "hockey", "mma", "ufc", "tennis",
+])
+# Weak keywords: appear in non-sports contexts — require a strong match too
+_WEAK_SPORT_KW = frozenset([
+    "points", "rebounds", "assists", "touchdowns", "goals", "runs", "yards",
     "over", "under", "spread", "moneyline",
 ])
+SPORT_KEYWORDS = _STRONG_SPORT_KW | _WEAK_SPORT_KW
 
 def _fetch_polymarket_via_cli():
     """
@@ -304,7 +350,9 @@ def _filter_sports_markets(markets):
     for m in markets:
         title = (m.get("question", "") + " " + m.get("description", "")
                  + " " + " ".join(m.get("tags") or [])).lower()
-        if any(kw in title for kw in SPORT_KEYWORDS):
+        has_strong = any(kw in title for kw in _STRONG_SPORT_KW)
+        has_team = bool(extract_teams_from_text(title))
+        if has_strong or has_team:
             filtered.append(m)
     return filtered
 
@@ -345,7 +393,7 @@ def fetch_polymarket_sports(db=None):
         if isinstance(data, list):
             for m in data:
                 title = (m.get("question", "") + " " + m.get("description", "")).lower()
-                if any(kw in title for kw in SPORT_KEYWORDS):
+                if any(kw in title for kw in _STRONG_SPORT_KW) or extract_teams_from_text(title):
                     markets.append(m)
 
     # Deduplicate by condition_id
@@ -432,10 +480,9 @@ def fetch_kalshi_sports(db=None):
     else:
         raw_markets = []
 
-    sport_keywords = ["nba", "nfl", "mlb", "nhl", "soccer", "football", "basketball",
-                      "baseball", "hockey", "mma", "ufc", "tennis", "points", "rebounds",
-                      "assists", "touchdowns", "goals", "runs", "yards", "super bowl",
-                      "world series", "stanley cup", "march madness", "over", "under"]
+    strong_kw = ["nba", "nfl", "mlb", "nhl", "soccer", "football", "basketball",
+                  "baseball", "hockey", "mma", "ufc", "tennis", "super bowl",
+                  "world series", "stanley cup", "march madness"]
 
     results = []
     for m in raw_markets:
@@ -443,7 +490,7 @@ def fetch_kalshi_sports(db=None):
             title = (m.get("title", "") + " " + m.get("subtitle", "") + " " +
                      m.get("event_ticker", "") + " " + m.get("category", "")).lower()
 
-            if not any(kw in title for kw in sport_keywords):
+            if not (any(kw in title for kw in strong_kw) or extract_teams_from_text(title)):
                 continue
 
             yes_price = m.get("yes_bid", 0) or m.get("last_price", 0) or 0
@@ -774,19 +821,21 @@ def find_all_arb_opportunities(prediction_markets, sportsbook_entries, min_net_p
 
         pred_fee = POLYMARKET_FEE if source == "polymarket" else KALSHI_FEE
 
-        # Narrow candidates by team index
+        # Narrow candidates by team index — skip markets with no teams
         pred_teams = pred.get("teams", [])
-        if pred_teams:
-            candidate_indices = set()
-            for team in pred_teams:
-                candidate_indices.update(team_index.get(team, set()))
-            candidates = [sportsbook_entries[i] for i in candidate_indices]
-        else:
-            candidates = sportsbook_entries  # fallback: no team info
+        if not pred_teams:
+            continue  # can't match to sportsbook without team info
+
+        candidate_indices = set()
+        for team in pred_teams:
+            candidate_indices.update(team_index.get(team, set()))
+        if not candidate_indices:
+            continue  # no sportsbook entries share a team
+        candidates = [sportsbook_entries[i] for i in candidate_indices]
 
         # Further narrow by sport category
         pred_sport = pred.get("_sport_category")
-        if pred_sport and candidates is not sportsbook_entries:
+        if pred_sport:
             candidates = [c for c in candidates
                           if not c.get("_sport_category") or c["_sport_category"] == pred_sport]
 
