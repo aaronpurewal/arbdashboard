@@ -606,7 +606,7 @@ async function runScan() {
     console.error("Scan error:", err);
     showToast("Scan failed: " + err.message);
     // Set all statuses to error
-    document.getElementById("statusPoly").className = "status-dot error";
+    document.getElementById("statusPolymarket").className = "status-dot error";
     document.getElementById("statusKalshi").className = "status-dot error";
     document.getElementById("statusSportsbook").className = "status-dot error";
   } finally {
