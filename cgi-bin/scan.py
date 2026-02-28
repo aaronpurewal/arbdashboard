@@ -373,28 +373,39 @@ def fetch_polymarket_sports(db=None):
         markets = _fetch_polymarket_via_cli()
 
     if markets is None:
-        # HTTP fallback: original 13-call approach
+        # HTTP fallback: parallel fetch across all sport tags
         markets = []
         sport_tags = ["sports", "nba", "nfl", "mlb", "nhl", "soccer", "football",
                       "basketball", "baseball", "hockey", "mma", "ufc"]
 
-        for tag in sport_tags:
+        def _fetch_tag(tag):
             url = f"https://gamma-api.polymarket.com/markets?tag={tag}&closed=false&limit=100"
             data = fetch_json(url)
             if isinstance(data, list):
-                markets.extend(data)
-            elif isinstance(data, dict) and not data.get("_error"):
-                if "markets" in data:
-                    markets.extend(data["markets"])
+                return data
+            if isinstance(data, dict) and not data.get("_error") and "markets" in data:
+                return data["markets"]
+            return []
 
-        # Also try without tag filter and search for sports keywords
-        url = "https://gamma-api.polymarket.com/markets?closed=false&limit=200&active=true"
-        data = fetch_json(url)
-        if isinstance(data, list):
-            for m in data:
-                title = (m.get("question", "") + " " + m.get("description", "")).lower()
-                if any(kw in title for kw in _STRONG_SPORT_KW) or extract_teams_from_text(title):
-                    markets.append(m)
+        def _fetch_untagged():
+            url = "https://gamma-api.polymarket.com/markets?closed=false&limit=200&active=true"
+            data = fetch_json(url)
+            if isinstance(data, list):
+                return [m for m in data
+                        if any(kw in (m.get("question", "") + " " + m.get("description", "")).lower()
+                               for kw in _STRONG_SPORT_KW)
+                        or extract_teams_from_text(
+                            (m.get("question", "") + " " + m.get("description", "")).lower())]
+            return []
+
+        with ThreadPoolExecutor(max_workers=14) as pool:
+            tag_futures = [pool.submit(_fetch_tag, tag) for tag in sport_tags]
+            untagged_future = pool.submit(_fetch_untagged)
+            for f in as_completed(tag_futures + [untagged_future]):
+                try:
+                    markets.extend(f.result(timeout=12))
+                except Exception:
+                    continue
 
     # Deduplicate by condition_id
     seen = set()
