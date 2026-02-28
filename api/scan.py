@@ -15,11 +15,13 @@ class handler(BaseHTTPRequestHandler):
 
         result = scanner.run_scan(params)
 
+        body = json.dumps(result, default=scanner._json_default).encode()
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Cache-Control', 's-maxage=30, stale-while-revalidate=30')
         self.end_headers()
-        self.wfile.write(json.dumps(result, default=scanner._json_default).encode())
+        self.wfile.write(body)
 
     def do_OPTIONS(self):
         self.send_response(200)

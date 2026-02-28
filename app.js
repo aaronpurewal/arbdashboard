@@ -655,6 +655,9 @@ async function runScan() {
 
     applyFilters();
 
+    // Cache for instant display on next visit
+    try { localStorage.setItem("arbscanner_last_scan", JSON.stringify(data)); } catch (e) { /* quota */ }
+
   } catch (err) {
     console.error("Scan error:", err);
     showToast("Scan failed: " + err.message);
@@ -847,10 +850,26 @@ function setupEventListeners() {
 
 async function init() {
   setupEventListeners();
-  await loadConfig();
+
+  // Show cached data instantly (stale-while-revalidate)
+  const cached = localStorage.getItem("arbscanner_last_scan");
+  if (cached) {
+    try {
+      const data = JSON.parse(cached);
+      state.opportunities = data.opportunities || [];
+      state.meta = data.meta || {};
+      updateSourceStatus(data.meta?.sources, data.meta?.errors);
+      applyFilters();
+    } catch (e) { /* ignore corrupt cache */ }
+  }
+
+  // Fire config + scan in parallel (scan reads API key from env on backend)
+  const configPromise = loadConfig();
+  const scanPromise = runScan();
+  await configPromise;
+
   resetCountdown();
   startAutoRefresh();
-  runScan();
 }
 
 // Start
