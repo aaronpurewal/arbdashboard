@@ -542,17 +542,73 @@ function updateStats() {
   }
 }
 
-function updateSourceStatus(sources) {
+function updateSourceStatus(sources, errors) {
   if (!sources) return;
-  const statusMap = { ok: "ok", empty: "stale", error: "error", no_key: "no_key", pending: "pending", ok_no_arbs: "ok" };
+  const statusMap = {
+    ok: "ok", empty: "stale", error: "error", no_key: "no_key",
+    pending: "pending", ok_no_arbs: "ok",
+    quota_exceeded: "error", invalid_key: "error",
+  };
 
   for (const [key, status] of Object.entries(sources)) {
     const dotId = `status${key.charAt(0).toUpperCase() + key.slice(1)}`;
     const dot = document.getElementById(dotId);
     if (!dot) continue;
-    // Remove all status classes
     dot.className = "status-dot";
     dot.classList.add(statusMap[status] || "error");
+  }
+
+  // Show API key warning banner if needed
+  const banner = document.getElementById("demoBanner");
+  const sbStatus = sources.sportsbook;
+  if (sbStatus === "quota_exceeded" || sbStatus === "invalid_key" || sbStatus === "no_key" ||
+      (sbStatus === "error" && errors && errors.length)) {
+    banner.textContent = "";
+    banner.className = "demo-banner warning";
+    const icon = document.createTextNode("\u26A0 ");
+    banner.appendChild(icon);
+    const strong = document.createElement("strong");
+    if (sbStatus === "quota_exceeded") {
+      strong.textContent = "Odds API quota exceeded";
+      banner.appendChild(strong);
+      banner.appendChild(document.createTextNode(" \u2014 usage limit reached. "));
+      const link = document.createElement("a");
+      link.href = "https://the-odds-api.com";
+      link.target = "_blank";
+      link.style.cssText = "color:inherit;text-decoration:underline";
+      link.textContent = "Check your plan";
+      banner.appendChild(link);
+      banner.appendChild(document.createTextNode(" or wait for it to reset."));
+    } else if (sbStatus === "invalid_key") {
+      strong.textContent = "Odds API key invalid";
+      banner.appendChild(strong);
+      banner.appendChild(document.createTextNode(" \u2014 update your key in "));
+      const link = document.createElement("a");
+      link.href = "#";
+      link.style.cssText = "color:inherit;text-decoration:underline";
+      link.textContent = "Settings";
+      link.addEventListener("click", (e) => { e.preventDefault(); document.getElementById("settingsDrawer").classList.add("open"); });
+      banner.appendChild(link);
+      banner.appendChild(document.createTextNode("."));
+    } else if (sbStatus === "no_key") {
+      strong.textContent = "No Odds API key";
+      banner.appendChild(strong);
+      banner.appendChild(document.createTextNode(" \u2014 add your key in "));
+      const link = document.createElement("a");
+      link.href = "#";
+      link.style.cssText = "color:inherit;text-decoration:underline";
+      link.textContent = "Settings";
+      link.addEventListener("click", (e) => { e.preventDefault(); document.getElementById("settingsDrawer").classList.add("open"); });
+      banner.appendChild(link);
+      banner.appendChild(document.createTextNode(" to enable sportsbook data."));
+    } else {
+      strong.textContent = "Sportsbook error";
+      banner.appendChild(strong);
+      const errMsg = (errors || []).find(e => e.startsWith("Sportsbook:")) || (errors || [])[0] || "Unknown error";
+      banner.appendChild(document.createTextNode(" \u2014 " + errMsg));
+    }
+  } else {
+    banner.className = "demo-banner hidden";
   }
 }
 
@@ -575,10 +631,7 @@ async function runScan() {
     state.meta = data.meta || {};
 
     // Update source status
-    updateSourceStatus(data.meta?.sources);
-
-    // Hide demo banner (always live mode)
-    document.getElementById("demoBanner").classList.add("hidden");
+    updateSourceStatus(data.meta?.sources, data.meta?.errors);
 
     // Check for new high-value opportunities
     const newHighValue = state.opportunities.filter(o =>

@@ -436,6 +436,16 @@ body::before {
   cursor: pointer;
 }
 
+.demo-banner.warning {
+  background: var(--yellow-bg);
+  border: 1px solid var(--yellow-border);
+  color: var(--yellow);
+}
+
+.demo-banner.warning a {
+  color: var(--yellow);
+}
+
 .demo-banner.hidden {
   display: none;
 }

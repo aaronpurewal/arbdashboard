@@ -575,6 +575,8 @@ def fetch_sportsbook_odds(db=None, api_key=""):
     bookmakers = "draftkings,fanduel,betrivers,betmgm,pinnacle,williamhill_us,bovada"
     all_events = []
 
+    api_errors = []
+
     def _fetch_sport(sport, is_prop=False):
         """Fetch a single sport from The Odds API. Thread-safe (no shared state)."""
         if is_prop:
@@ -585,6 +587,13 @@ def fetch_sportsbook_odds(db=None, api_key=""):
                f"apiKey={api_key}&regions=us&markets={markets_param}"
                f"&bookmakers={bookmakers}&oddsFormat=american")
         data = fetch_json(url)
+        if isinstance(data, dict) and "_error" in data:
+            err = data["_error"]
+            if "401" in err or "403" in err:
+                raise RuntimeError("INVALID_KEY")
+            if "429" in err or "quota" in err.lower() or "limit" in err.lower():
+                raise RuntimeError("QUOTA_EXCEEDED")
+            raise RuntimeError(err)
         events = []
         if isinstance(data, list):
             for event in data:
@@ -604,8 +613,17 @@ def fetch_sportsbook_odds(db=None, api_key=""):
         for future in as_completed(futures):
             try:
                 all_events.extend(future.result(timeout=12))
+            except RuntimeError as e:
+                api_errors.append(str(e))
             except Exception:
                 continue
+
+    # If all requests failed with the same API error, propagate it
+    if not all_events and api_errors:
+        if any(e == "QUOTA_EXCEEDED" for e in api_errors):
+            raise RuntimeError("QUOTA_EXCEEDED: Odds API usage limit reached. Check your plan at https://the-odds-api.com")
+        if any(e == "INVALID_KEY" for e in api_errors):
+            raise RuntimeError("INVALID_KEY: Odds API key is invalid or expired. Update it in Settings.")
 
     # Parse into normalized format
     results = []
@@ -1167,6 +1185,15 @@ def run_scan(params):
             try:
                 sportsbook_entries = future_sb.result(timeout=15)
                 sources_status["sportsbook"] = "ok" if sportsbook_entries else "empty"
+            except RuntimeError as e:
+                err_msg = str(e)
+                if "QUOTA_EXCEEDED" in err_msg:
+                    sources_status["sportsbook"] = "quota_exceeded"
+                elif "INVALID_KEY" in err_msg:
+                    sources_status["sportsbook"] = "invalid_key"
+                else:
+                    sources_status["sportsbook"] = "error"
+                errors.append(f"Sportsbook: {err_msg}")
             except Exception as e:
                 sources_status["sportsbook"] = "error"
                 errors.append(f"Sportsbook: {str(e)}")
