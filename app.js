@@ -151,6 +151,13 @@ async function fetchDetail(opp, bankroll) {
 }
 
 async function loadConfig() {
+  // Try localStorage first (persists across page reloads on deployed site)
+  try {
+    const saved = localStorage.getItem("arbscanner_config");
+    if (saved) Object.assign(state.config, JSON.parse(saved));
+  } catch (e) { /* corrupt localStorage */ }
+
+  // Then try backend API (may override localStorage)
   try {
     const url = `${API_BASE}/config`;
     const resp = await fetch(url);
@@ -166,11 +173,16 @@ async function loadConfig() {
       }
     }
   } catch (e) {
-    // Backend unavailable, use in-memory defaults
+    // Backend unavailable, localStorage config already loaded
   }
 }
 
 async function saveConfig(configData) {
+  // Always persist to localStorage (survives Vercel ephemeral storage)
+  try {
+    localStorage.setItem("arbscanner_config", JSON.stringify(configData));
+  } catch (e) { /* quota */ }
+
   try {
     const url = `${API_BASE}/config`;
     await fetch(url, {
