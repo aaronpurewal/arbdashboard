@@ -26,7 +26,8 @@ from functools import lru_cache
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(_PROJECT_ROOT, "data.db") if os.access(_PROJECT_ROOT, os.W_OK) else "/tmp/data.db"
-CACHE_TTL = 60  # seconds
+CACHE_TTL = 60  # seconds — prediction markets (Poly/Kalshi)
+SPORTSBOOK_CACHE_TTL = 300  # seconds — sportsbook odds (saves API credits)
 
 # ─── Database helpers ─────────────────────────────────────────────────────────
 
@@ -52,6 +53,13 @@ def get_config(db, key, default=None):
 def get_cached(db, cache_key, ttl=CACHE_TTL):
     row = db.execute("SELECT data, ts FROM cache WHERE cache_key=?", [cache_key]).fetchone()
     if row and (time.time() - row[1]) < ttl:
+        return json.loads(row[0])
+    return None
+
+def get_stale_cached(db, cache_key):
+    """Return cached data even if expired — used as fallback when API fails."""
+    row = db.execute("SELECT data, ts FROM cache WHERE cache_key=?", [cache_key]).fetchone()
+    if row:
         return json.loads(row[0])
     return None
 
@@ -760,7 +768,7 @@ def fetch_sportsbook_odds(db=None, api_key=""):
     if db is None:
         db = get_db()
     cache_key = "sportsbook_odds"
-    cached = get_cached(db, cache_key)
+    cached = get_cached(db, cache_key, ttl=SPORTSBOOK_CACHE_TTL)
     if cached is not None:
         return cached
 
@@ -824,12 +832,16 @@ def fetch_sportsbook_odds(db=None, api_key=""):
             except Exception:
                 continue
 
-    # If all requests failed with the same API error, propagate it
+    # If all requests failed, try stale cache before giving up
     if not all_events and api_errors:
-        if any(e == "QUOTA_EXCEEDED" for e in api_errors):
-            raise RuntimeError("QUOTA_EXCEEDED: Odds API usage limit reached. Check your plan at https://the-odds-api.com")
         if any(e == "INVALID_KEY" for e in api_errors):
             raise RuntimeError("INVALID_KEY: Odds API key is invalid or expired. Update it in Settings.")
+        # For quota/rate limit errors, return stale cached data if available
+        stale = get_stale_cached(db, cache_key)
+        if stale is not None:
+            return stale
+        if any(e == "QUOTA_EXCEEDED" for e in api_errors):
+            raise RuntimeError("QUOTA_EXCEEDED: Odds API usage limit reached. Check your plan at https://the-odds-api.com")
 
     # Parse into normalized format
     results = []
@@ -1413,9 +1425,14 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
                 if pm_line is not None and km_line is not None and abs(pm_line - km_line) >= 0.01:
                     continue
 
-            # For game winner markets, require both teams to match
-            is_game = ("winner" in pm_question or "win" in pm_question
-                       or "winner" in km_question or "win" in km_question)
+            # For game markets, require both teams to match
+            # Check by market subtype (h2h) AND keywords — EPL titles often lack "win"
+            is_game = (pm.get("_market_subtype") == "h2h"
+                       or km.get("_market_subtype") == "h2h"
+                       or "winner" in pm_question or "win" in pm_question
+                       or "winner" in km_question or "win" in km_question
+                       or " vs " in pm_question or " vs " in km_question
+                       or " at " in pm_question or " at " in km_question)
             if is_game and len(pm_teams) >= 2 and len(km_teams) >= 2:
                 if team_overlap < 2:
                     continue
@@ -2858,7 +2875,30 @@ def main():
     print()
     query_string = os.environ.get("QUERY_STRING", "")
     params = dict(urllib.parse.parse_qsl(query_string))
-    print(json.dumps(run_scan(params), default=_json_default))
+    try:
+        print(json.dumps(run_scan(params), default=_json_default))
+    except Exception as e:
+        err_msg = str(e)
+        sources = {"polymarket": "error", "kalshi": "error", "sportsbook": "error"}
+        if "QUOTA_EXCEEDED" in err_msg:
+            sources["sportsbook"] = "quota_exceeded"
+            sources["polymarket"] = "ok"
+            sources["kalshi"] = "ok"
+        elif "INVALID_KEY" in err_msg:
+            sources["sportsbook"] = "invalid_key"
+        print(json.dumps({
+            "opportunities": [],
+            "meta": {
+                "scan_time": 0,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "total_opportunities": 0,
+                "arb_count": 0,
+                "ev_count": 0,
+                "sources": sources,
+                "errors": [err_msg],
+                "is_demo": False,
+            }
+        }))
 
 if __name__ == "__main__":
     main()
