@@ -345,6 +345,79 @@ def _detect_sport_category(text):
             return TEAM_TO_SPORT[team]
     return None
 
+# ─── Market subtype classification ───────────────────────────────────────────
+
+# Map Kalshi series tickers to market subtypes
+SERIES_MARKET_SUBTYPE = {
+    "KXNBAGAME": "h2h", "KXNFLGAME": "h2h", "KXMLBGAME": "h2h",
+    "KXNHLGAME": "h2h", "KXUFCFIGHT": "h2h", "KXMMAGAME": "h2h",
+    "KXEPLGAME": "h2h", "KXMLSGAME": "h2h",
+    "KXNBASPREAD": "winning_margin", "KXNFLSPREAD": "winning_margin",
+    "KXMLBSPREAD": "winning_margin", "KXNHLSPREAD": "winning_margin",
+    "KXNBATOTAL": "totals", "KXNFLTOTAL": "totals", "KXEPLTOTAL": "totals",
+    "KXNBA1HTOTAL": "1h_totals",
+    "KXNBAPTS": "player_props",
+}
+
+# Which sportsbook market_type values each prediction subtype can match
+_MARKET_TYPE_COMPAT = {
+    "h2h": {"h2h"},
+    "spreads": {"spreads"},
+    "totals": {"totals"},
+    "winning_margin": set(),    # Kalshi "wins by over X" ≠ standard sportsbook spreads
+    "1h_totals": set(),         # No sportsbook 1st-half data available
+    "player_props": {"player_points", "player_rebounds", "player_assists", "player_threes"},
+    "futures": set(),           # Season/championship markets don't match single-game odds
+    "unknown": {"h2h", "spreads", "totals", "player_points", "player_rebounds",
+                "player_assists", "player_threes"},
+}
+
+_FUTURES_RE = re.compile(
+    r"championship|stanley cup|world series|super bowl|"
+    r"mvp|most valuable|make.*playoffs|win.*20\d\d|"
+    r"nba finals|win.*title|win.*division|win.*conference",
+    re.IGNORECASE,
+)
+
+_POINT_LINE_RE = re.compile(
+    r'(?:over|under|spread|cover|[+-])\s*(\d+(?:\.\d+)?)',
+    re.IGNORECASE,
+)
+
+
+def _infer_market_subtype(question):
+    """Infer market subtype from prediction market question text."""
+    q = question.lower()
+    has_over = bool(re.search(r'\bover\b', q))
+    has_under = bool(re.search(r'\bunder\b', q))
+    # Futures / championship — check first (may also contain "win")
+    if _FUTURES_RE.search(question):
+        return "futures"
+    # Spreads — check before totals (avoid "cover" containing "over")
+    if "spread" in q or "cover" in q:
+        return "spreads"
+    # Game totals: "total" keyword + over/under
+    if "total" in q and (has_over or has_under):
+        return "totals"
+    # Player props: stat keyword + over/under (without "total")
+    if any(kw in q for kw in ("points", "rebounds", "assists", "threes", "strikeouts")):
+        if has_over or has_under:
+            return "player_props"
+    # Totals: over/under with a point number (no "total" keyword)
+    if (has_over or has_under) and _POINT_LINE_RE.search(question):
+        return "totals"
+    # Game winner / moneyline
+    if any(kw in q for kw in ("win", "winner", "beat", "defeat")):
+        return "h2h"
+    return "unknown"
+
+
+def _extract_point_line(text):
+    """Extract point line (e.g., 215.5) from question text."""
+    m = _POINT_LINE_RE.search(text)
+    return float(m.group(1)) if m else None
+
+
 # ─── Polymarket CLI helpers ───────────────────────────────────────────────────
 
 def _polymarket_cli_available():
@@ -505,6 +578,7 @@ def fetch_polymarket_sports(db=None):
                 "teams": extract_teams_from_text(question),
                 "_tokens": set(normalize_name(question + " " + (m.get("description", "") or "")).split()),
                 "_sport_category": _detect_sport_category(question),
+                "_market_subtype": _infer_market_subtype(question),
                 "url": f"https://polymarket.com/event/{m.get('slug', '')}" if m.get('slug') else "",
             }
             results.append(entry)
@@ -589,7 +663,7 @@ def fetch_kalshi_sports(db=None):
         mkts = []
         if isinstance(data, dict) and "markets" in data:
             for m in data["markets"]:
-                mkts.append((m, category))
+                mkts.append((m, category, series_ticker))
         return mkts
 
     # Kalshi Basic tier: 20 reads/sec — 5 workers avoids throttling
@@ -603,16 +677,20 @@ def fetch_kalshi_sports(db=None):
 
     # Normalize into standard format
     results = []
-    for m, category in raw_markets:
+    for m, category, series_ticker in raw_markets:
         try:
             title = m.get("title", "")
             yes_prob, no_prob = _kalshi_parse_price(m)
+
+            # Use floor_strike for point line (totals/spreads/props)
+            floor_strike = m.get("floor_strike")
+            no_sub = m.get("no_sub_title", "") or ""
 
             entry = {
                 "source": "kalshi",
                 "id": m.get("ticker", ""),
                 "question": title,
-                "description": m.get("subtitle", "") or title,
+                "description": no_sub or m.get("subtitle", "") or title,
                 "outcomes": ["Yes", "No"],
                 "prices": [yes_prob, no_prob],
                 "end_date": m.get("expiration_time", "") or m.get("close_time", ""),
@@ -621,8 +699,11 @@ def fetch_kalshi_sports(db=None):
                 "ticker": m.get("ticker", ""),
                 "event_ticker": m.get("event_ticker", ""),
                 "teams": extract_teams_from_text(title),
-                "_tokens": set(normalize_name(title).split()),
+                "_tokens": set(normalize_name(title + " " + no_sub).split()),
                 "_sport_category": category,
+                "_market_subtype": SERIES_MARKET_SUBTYPE.get(series_ticker, "unknown"),
+                "_floor_strike": float(floor_strike) if floor_strike is not None else None,
+                "_no_sub_title": no_sub,
                 "url": f"https://kalshi.com/markets/{m.get('ticker', '').lower()}" if m.get('ticker') else "",
             }
             results.append(entry)
@@ -787,10 +868,12 @@ def try_match_prediction_to_sportsbook(pred_market, sportsbook_entries):
                     team_matches += 1
                     break  # count each pred team at most once
 
-        # For game winner / h2h markets, BOTH teams must match
-        # This prevents "Chicago at Utah" matching "Chicago vs Colorado"
-        is_game_market = ("winner" in question or "win" in question
-                          or sb.get("market_type") == "h2h")
+        # For game-specific markets (h2h, totals, spreads), BOTH teams must match
+        # This prevents "Brighton at Sunderland" matching "Arsenal at Brighton"
+        pred_subtype = pred_market.get("_market_subtype", "unknown")
+        is_game_market = pred_subtype in ("h2h", "totals", "spreads", "winning_margin") or (
+            "winner" in question or "win" in question
+            or sb.get("market_type") in ("h2h", "totals", "spreads"))
         if is_game_market and len(pred_teams) >= 2:
             if team_matches < 2:
                 continue  # skip — wrong game
@@ -962,6 +1045,32 @@ def find_all_arb_opportunities(prediction_markets, sportsbook_entries, min_net_p
             candidates = [c for c in candidates
                           if not c.get("_sport_category") or c["_sport_category"] == pred_sport]
 
+        # Narrow by market type compatibility
+        pred_subtype = pred.get("_market_subtype", "unknown")
+        allowed_sb_types = _MARKET_TYPE_COMPAT.get(pred_subtype, _MARKET_TYPE_COMPAT["unknown"])
+        if not allowed_sb_types:
+            continue  # futures and 1h_totals can't match sportsbooks
+        candidates = [c for c in candidates if c.get("market_type") in allowed_sb_types]
+
+        # Skip soccer h2h — 3-way market (win/draw/lose) can't arb against binary
+        if pred_subtype == "h2h" and pred.get("_sport_category") == "soccer":
+            continue
+
+        # For totals/spreads/props, require matching point line
+        if pred_subtype in ("totals", "spreads", "player_props"):
+            # Use floor_strike (Kalshi API) first, fall back to text extraction
+            pred_line = pred.get("_floor_strike") or _extract_point_line(pred.get("question", ""))
+            if pred_line is not None:
+                candidates = [c for c in candidates
+                              if c.get("outcome_point") is not None
+                              and abs(abs(c["outcome_point"]) - abs(pred_line)) < 1.0]
+            else:
+                # No point line extractable — too ambiguous to match reliably
+                continue
+
+        if not candidates:
+            continue
+
         # Find matching sportsbook entries
         matches = try_match_prediction_to_sportsbook(pred, candidates)
 
@@ -973,20 +1082,39 @@ def find_all_arb_opportunities(prediction_markets, sportsbook_entries, min_net_p
             if sb_prob <= 0 or sb_prob >= 1:
                 continue
 
-            # Determine side alignment: is sportsbook on the same side as
-            # prediction YES or prediction NO?
-            # Use price proximity: sb_prob closer to yes_price = same side,
-            # closer to no_price = opposite side.
-            diff_yes = abs(yes_price - sb_prob)
-            diff_no = abs(no_price - sb_prob)
+            # Determine side alignment using market-type-aware logic
+            sb_market_type = sb.get("market_type", "")
 
-            if diff_yes <= diff_no:
-                # sb is same side as prediction YES → arb: pred NO + sb
+            if pred_subtype in ("totals", "player_props") and sb_market_type in ("totals", "player_points", "player_rebounds", "player_assists", "player_threes"):
+                # Explicit over/under alignment — price proximity fails for totals
+                # Check question, description, and _no_sub_title for over/under
+                pred_text = (pred.get("question", "") + " " + pred.get("description", "") + " "
+                             + pred.get("_no_sub_title", "")).lower()
+                sb_outcome_lower = sb.get("outcome_name", "").lower()
+                has_over = bool(re.search(r'\bover\b', pred_text))
+                has_under = bool(re.search(r'\bunder\b', pred_text))
+                if has_over or has_under:
+                    pred_is_over = has_over and not has_under
+                    sb_is_over = sb_outcome_lower == "over"
+                    sb_same_as_yes = (pred_is_over == sb_is_over)
+                else:
+                    # No over/under found anywhere — fall back to price proximity
+                    diff_yes = abs(yes_price - sb_prob)
+                    diff_no = abs(no_price - sb_prob)
+                    sb_same_as_yes = (diff_yes <= diff_no)
+            else:
+                # h2h and spreads: price proximity heuristic
+                diff_yes = abs(yes_price - sb_prob)
+                diff_no = abs(no_price - sb_prob)
+                sb_same_as_yes = (diff_yes <= diff_no)
+
+            if sb_same_as_yes:
+                # sb same side as pred YES → arb: pred NO + sb
                 arb = compute_arb_binary(no_price, sb_prob, pred_fee, SPORTSBOOK_FEE)
                 pred_side = outcomes[1] if len(outcomes) > 1 else "No"
                 pred_price = no_price
             else:
-                # sb is same side as prediction NO → arb: pred YES + sb
+                # sb opposite side from pred YES → arb: pred YES + sb
                 arb = compute_arb_binary(yes_price, sb_prob, pred_fee, SPORTSBOOK_FEE)
                 pred_side = outcomes[0] if outcomes else "Yes"
                 pred_price = yes_price
@@ -1097,7 +1225,7 @@ def find_all_arb_opportunities(prediction_markets, sportsbook_entries, min_net_p
     # Deduplicate: keep best arb per unique event+platforms pair
     seen = {}
     for opp in opportunities:
-        key = f"{opp['event']}-{opp['platform_a']['name']}-{opp['platform_b']['name']}"
+        key = f"{opp['event']}-{opp['platform_a']['name']}-{opp['platform_b']['name']}-{opp['market_type']}"
         if key not in seen or opp['net_arb_pct'] > seen[key]['net_arb_pct']:
             seen[key] = opp
 
@@ -1148,6 +1276,20 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
             # Match by teams and text
             team_overlap = len(set(pm_teams) & set(km_teams))
 
+            # Market subtype must be compatible (don't match h2h vs totals)
+            pm_subtype = pm.get("_market_subtype", "unknown")
+            km_subtype = km.get("_market_subtype", "unknown")
+            if pm_subtype != "unknown" and km_subtype != "unknown":
+                if pm_subtype != km_subtype:
+                    continue  # different market types
+
+            # For totals, require matching point line
+            if pm_subtype == "totals" and km_subtype == "totals":
+                pm_line = _extract_point_line(pm.get("question", ""))
+                km_line = _extract_point_line(km.get("question", ""))
+                if pm_line is not None and km_line is not None and abs(pm_line - km_line) >= 1.0:
+                    continue
+
             # For game winner markets, require both teams to match
             is_game = ("winner" in pm_question or "win" in pm_question
                        or "winner" in km_question or "win" in km_question)
@@ -1166,14 +1308,31 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
                 continue
 
             # Determine if Poly YES and Kalshi YES are the same outcome
-            # using price proximity
             pm_yes, pm_no = pm_prices[0], pm_prices[1]
             km_yes, km_no = km_prices[0], km_prices[1]
 
-            diff_aligned = abs(pm_yes - km_yes)
-            diff_misaligned = abs(pm_yes - km_no)
+            if pm_subtype in ("totals", "player_props"):
+                # Explicit over/under alignment for totals
+                pm_has_over = bool(re.search(r'\bover\b', pm_question))
+                pm_has_under = bool(re.search(r'\bunder\b', pm_question))
+                km_has_over = bool(re.search(r'\bover\b', km_question))
+                km_has_under = bool(re.search(r'\bunder\b', km_question))
+                if (pm_has_over or pm_has_under) and (km_has_over or km_has_under):
+                    pm_is_over = pm_has_over and not pm_has_under
+                    km_is_over = km_has_over and not km_has_under
+                    aligned = (pm_is_over == km_is_over)
+                else:
+                    # Fall back to price proximity
+                    diff_aligned = abs(pm_yes - km_yes)
+                    diff_misaligned = abs(pm_yes - km_no)
+                    aligned = (diff_aligned <= diff_misaligned)
+            else:
+                # Price proximity for h2h / unknown
+                diff_aligned = abs(pm_yes - km_yes)
+                diff_misaligned = abs(pm_yes - km_no)
+                aligned = (diff_aligned <= diff_misaligned)
 
-            if diff_aligned <= diff_misaligned:
+            if aligned:
                 # Aligned: PM YES ≈ KM YES → arb: PM YES + KM NO
                 arb = compute_arb_binary(pm_yes, km_no, POLYMARKET_FEE, KALSHI_FEE)
                 pa_side = pm.get("outcomes", ["Yes"])[0]
