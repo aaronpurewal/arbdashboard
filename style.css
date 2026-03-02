@@ -1088,6 +1088,12 @@ tr.tier-ev:hover td {
    DETAIL PANEL (Expanded Row)
    ══════════════════════════════════════════════════════════════════════════ */
 .detail-panel { display: none; }
+.detail-panel td {
+  overflow: hidden;
+  max-width: 0;          /* forces td to respect table width instead of expanding */
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
 
 .detail-panel.open {
   display: table-row;
@@ -1104,11 +1110,15 @@ tr.tier-ev:hover td {
   background: rgba(8, 14, 28, 0.6);
   backdrop-filter: var(--glass-blur);
   border-bottom: 2px solid rgba(0, 255, 136, 0.1);
+  overflow: hidden;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }
 
 .detail-grid {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
+  min-width: 0;
   gap: 18px;
 }
 
@@ -1118,6 +1128,9 @@ tr.tier-ev:hover td {
   border-radius: var(--radius-md);
   padding: 18px;
   backdrop-filter: blur(10px);
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-wrap: break-word;
 }
 
 .detail-section h4 {
@@ -1186,7 +1199,7 @@ tr.tier-ev:hover td {
 }
 
 /* Fee table */
-.fee-table { width: 100%; font-family: var(--font-mono); font-size: 0.7rem; }
+.fee-table { width: 100%; font-family: var(--font-mono); font-size: 0.7rem; table-layout: auto; }
 .fee-table td {
   padding: 6px 8px;
   border-bottom: 1px solid var(--border-subtle);
@@ -1682,6 +1695,9 @@ tr.new-row-enter:nth-child(25) { animation-delay: 0.48s; }
   border-radius: 8px;
   margin-bottom: 16px;
   border-left: 3px solid;
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-wrap: break-word;
 }
 .arb-explainer {
   background: rgba(0, 255, 136, 0.06);
