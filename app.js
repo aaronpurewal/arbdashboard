@@ -703,11 +703,25 @@ function updateCountdownDisplay() {
   }
 }
 
+function isAutoScanWindow() {
+  // Auto-scan only between 2 PM ET (14:00) and 12 AM ET (00:00)
+  const now = new Date();
+  // Get current hour in US Eastern time
+  const etHour = parseInt(
+    now.toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: false })
+  );
+  return etHour >= 14; // 14:00–23:59 ET
+}
+
 function startAutoRefresh() {
   if (state.countdownInterval) clearInterval(state.countdownInterval);
   if (state.scanInterval) clearInterval(state.scanInterval);
 
   state.countdownInterval = setInterval(() => {
+    if (!isAutoScanWindow()) {
+      document.getElementById("countdown").textContent = "off-hours";
+      return;
+    }
     state.countdownSeconds--;
     if (state.countdownSeconds <= 0) {
       runScan();
