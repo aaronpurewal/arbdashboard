@@ -50,6 +50,7 @@ DEFAULT_CONFIG = {
     "sound_alerts": False,
     "include_live": True,
     "default_bankroll": 100,
+    "devig_method": "power",
 }
 
 def main():

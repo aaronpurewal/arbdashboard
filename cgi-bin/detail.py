@@ -84,30 +84,22 @@ def compute_optimal_stakes(prob_a, prob_b, bankroll, fee_a=0, fee_b=0):
     if cost >= 1.0:
         return {"error": "No arbitrage exists (combined cost >= 1.0)"}
 
-    # For equal payout strategy: stake proportional to probability
-    # Target payout = bankroll / (prob_a + prob_b) per unit
-    # stake_a = payout * prob_a
-    # stake_b = payout * prob_b
     target_payout = bankroll
     stake_a = round(target_payout * prob_a, 2)
     stake_b = round(target_payout * prob_b, 2)
     total_staked = round(stake_a + stake_b, 2)
 
-    # With fees
-    win_a = round(stake_a / prob_a - stake_a, 2)  # winnings on side A
-    win_b = round(stake_b / prob_b - stake_b, 2)  # winnings on side B
+    win_a = round(stake_a / prob_a - stake_a, 2)
+    win_b = round(stake_b / prob_b - stake_b, 2)
     fee_on_win_a = round(win_a * fee_a, 2)
     fee_on_win_b = round(win_b * fee_b, 2)
 
-    # If A wins: payout from A - stake on B - fees
     profit_if_a = round(stake_a / prob_a - stake_a - stake_b - fee_on_win_a, 2)
-    # If B wins: payout from B - stake on A - fees
     profit_if_b = round(stake_b / prob_b - stake_a - stake_b - fee_on_win_b, 2)
 
     gross_profit = round(target_payout - total_staked, 2)
     gross_roi = round((gross_profit / total_staked) * 100, 3) if total_staked > 0 else 0
 
-    # Breakdown by bankroll amounts
     bankroll_scenarios = []
     for br in [100, 500, 1000, 5000, 10000]:
         scale = br / bankroll if bankroll > 0 else 1
@@ -148,6 +140,51 @@ def compute_optimal_stakes(prob_a, prob_b, bankroll, fee_a=0, fee_b=0):
                 "net_profit": profit_if_b,
             },
         },
+        "bankroll_table": bankroll_scenarios,
+    }
+
+
+def compute_optimal_stakes_3way(prob_a, prob_b, prob_c, bankroll, fee_a=0, fee_b=0, fee_c=0):
+    """
+    Compute optimal stake allocation for 3-way arbitrage (e.g. soccer h2h).
+    """
+    if prob_a <= 0 or prob_b <= 0 or prob_c <= 0 or bankroll <= 0:
+        return None
+
+    cost = prob_a + prob_b + prob_c
+    if cost >= 1.0:
+        return {"error": "No 3-way arbitrage exists (combined cost >= 1.0)"}
+
+    target_payout = bankroll
+    stake_a = round(target_payout * prob_a, 2)
+    stake_b = round(target_payout * prob_b, 2)
+    stake_c = round(target_payout * prob_c, 2)
+    total_staked = round(stake_a + stake_b + stake_c, 2)
+
+    gross_profit = round(target_payout - total_staked, 2)
+    gross_roi = round((gross_profit / total_staked) * 100, 3) if total_staked > 0 else 0
+
+    bankroll_scenarios = []
+    for br in [100, 500, 1000, 5000, 10000]:
+        scale = br / bankroll if bankroll > 0 else 1
+        bankroll_scenarios.append({
+            "bankroll": br,
+            "stake_a": round(stake_a * scale, 2),
+            "stake_b": round(stake_b * scale, 2),
+            "stake_c": round(stake_c * scale, 2),
+            "total_staked": round(total_staked * scale, 2),
+            "gross_profit": round(gross_profit * scale, 2),
+        })
+
+    return {
+        "stake_a": stake_a,
+        "stake_b": stake_b,
+        "stake_c": stake_c,
+        "total_staked": total_staked,
+        "payout": target_payout,
+        "gross_profit": gross_profit,
+        "gross_roi_pct": gross_roi,
+        "n_sides": 3,
         "bankroll_table": bankroll_scenarios,
     }
 

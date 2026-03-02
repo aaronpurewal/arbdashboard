@@ -1493,6 +1493,26 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
 # Sportsbooks considered "sharp" (lowest vig, sharpest lines) — used preferentially
 SHARP_BOOKS = {"pinnacle", "lowvig", "novig"}
 
+# Sharpness weights for weighted consensus (Hubáček 2019 — decorrelation)
+BOOK_SHARPNESS = {
+    "pinnacle": 1.0,
+    "lowvig": 0.9,
+    "novig": 0.9,
+    "draftkings": 0.5,
+    "fanduel": 0.5,
+    "betmgm": 0.4,
+    "betrivers": 0.4,
+    "espnbet": 0.4,
+    "fanatics": 0.4,
+    "hardrock": 0.35,
+    "betonline": 0.35,
+    "mybookie": 0.3,
+    "betus": 0.3,
+    "ballybet": 0.3,
+    "betparx": 0.3,
+}
+DEFAULT_BOOK_WEIGHT = 0.35
+
 
 def _power_devig(probs):
     """
@@ -1522,15 +1542,83 @@ def _power_devig(probs):
     return [p ** k for p in probs]
 
 
-def build_fair_odds_index(sportsbook_entries):
+def _shin_devig(probs):
     """
-    Build a fair-odds index from sportsbook data.
-    Groups outcomes by (event_key, market_type, outcome_name, point),
-    devig using Pinnacle when available, else consensus of all books.
-    Returns dict keyed by (event_key, market_type) → dict of outcome fair probs.
+    Shin method devigging (Shin 1993, Wheatcroft 2024).
+    Models bookmaker vig as arising from an insider-trading fraction z.
+    Better calibrated for longshot markets.
+
+    Solves: Σ sqrt(z² + 4(1-z)(pᵢ/S)) = 2  for z ∈ (0, 1)
+    Then: fair_i = (sqrt(z² + 4(1-z)(pᵢ/S)) - z) / (2(1-z))
     """
-    # Group: (home_team, away_team, market_type) → { outcome_key → [(bookmaker, implied_prob)] }
-    market_groups = defaultdict(lambda: defaultdict(list))
+    import math
+
+    if len(probs) < 2:
+        return list(probs)
+    if any(p <= 0 for p in probs):
+        total = sum(probs)
+        return [p / total for p in probs] if total > 0 else list(probs)
+
+    S = sum(probs)
+    if S <= 1.0:
+        # No overround — already fair
+        return list(probs)
+
+    # Bisect for insider fraction z
+    lo, hi = 0.0, 1.0
+    for _ in range(100):
+        z = (lo + hi) / 2.0
+        one_minus_z = 1.0 - z
+        if one_minus_z <= 0:
+            hi = z
+            continue
+        total = sum(math.sqrt(z * z + 4.0 * one_minus_z * (p / S)) for p in probs)
+        if total > 2.0:
+            lo = z
+        else:
+            hi = z
+        if abs(total - 2.0) < 1e-12:
+            break
+
+    z = (lo + hi) / 2.0
+    one_minus_z = 1.0 - z
+    if one_minus_z <= 0:
+        # Fallback to multiplicative
+        return [p / S for p in probs]
+
+    fair = []
+    for p in probs:
+        disc = z * z + 4.0 * one_minus_z * (p / S)
+        f = (math.sqrt(disc) - z) / (2.0 * one_minus_z)
+        fair.append(max(0.0, f))
+
+    # Renormalize (should be very close to 1.0 already)
+    total = sum(fair)
+    if total > 0 and abs(total - 1.0) > 1e-9:
+        fair = [f / total for f in fair]
+
+    return fair
+
+
+def build_fair_odds_index(sportsbook_entries, devig_method="power"):
+    """
+    Build a fair-odds index using weighted multi-book consensus (Hubáček 2019).
+    Devigs each bookmaker's line independently, then computes weighted average
+    by sharpness weight. Returns richer structure with metadata.
+
+    Returns dict keyed by (event_key, market_type) → {
+        outcome_key → fair_prob,          # backward-compatible simple access
+        "_meta": {
+            outcome_key → {fair_prob, spread, stdev, n_books, source_books, overround}
+        }
+    }
+    """
+    devig_fn = _shin_devig if devig_method == "shin" else _power_devig
+
+    # Group: (event_key, mtype) → { bookmaker → { outcome_key → implied_prob } }
+    market_groups = defaultdict(lambda: defaultdict(lambda: {}))
+    # Also track which outcomes exist per market
+    market_outcomes = defaultdict(set)
 
     for sb in sportsbook_entries:
         home = sb.get("home_team", "")
@@ -1546,47 +1634,225 @@ def build_fair_odds_index(sportsbook_entries):
 
         event_key = f"{away}@{home}"
         outcome_key = f"{outcome}|{point}" if point is not None else outcome
-        market_groups[(event_key, mtype)][outcome_key].append((bk, prob))
+        market_key = (event_key, mtype)
 
-    # Devig each market group
-    fair_index = {}  # (event_key, mtype) → { outcome_key → fair_prob }
+        market_groups[market_key][bk][outcome_key] = prob
+        market_outcomes[market_key].add(outcome_key)
 
-    for (event_key, mtype), outcomes in market_groups.items():
+    fair_index = {}
+
+    for market_key, book_lines in market_groups.items():
+        all_okeys = sorted(market_outcomes[market_key])
+        if len(all_okeys) < 2:
+            continue
+
+        # Devig each book independently, then compute weighted average
+        # Only use books that have prices for ALL outcomes in this market
+        devigged_by_book = {}
+        for bk, omap in book_lines.items():
+            if not all(ok in omap for ok in all_okeys):
+                continue  # incomplete book — skip
+            raw = [omap[ok] for ok in all_okeys]
+            overround = sum(raw)
+            if overround <= 0:
+                continue
+            fair = devig_fn(raw)
+            devigged_by_book[bk] = {
+                "fair": dict(zip(all_okeys, fair)),
+                "overround": overround,
+            }
+
+        if not devigged_by_book:
+            continue
+
+        # Weighted average across books
         fair_probs = {}
+        meta = {}
+        for ok in all_okeys:
+            weighted_sum = 0.0
+            weight_sum = 0.0
+            values = []
+            source_books = []
 
-        # Try Pinnacle/sharp books first
-        sharp_total = 0
-        sharp_probs = {}
-        for okey, entries in outcomes.items():
-            sharp_entries = [(bk, p) for bk, p in entries if bk in SHARP_BOOKS]
-            if sharp_entries:
-                # Use the sharpest book's price (Pinnacle preferred)
-                pin = [p for bk, p in sharp_entries if bk == "pinnacle"]
-                sharp_probs[okey] = pin[0] if pin else sharp_entries[0][1]
-                sharp_total += sharp_probs[okey]
+            for bk, bdata in devigged_by_book.items():
+                fp = bdata["fair"].get(ok, 0)
+                if fp <= 0:
+                    continue
+                w = BOOK_SHARPNESS.get(bk, DEFAULT_BOOK_WEIGHT)
+                weighted_sum += w * fp
+                weight_sum += w
+                values.append(fp)
+                source_books.append(bk)
 
-        if sharp_probs and sharp_total > 0:
-            # Devig sharp lines using Power method
-            okeys = list(sharp_probs.keys())
-            raw = [sharp_probs[k] for k in okeys]
-            devigged = _power_devig(raw)
-            for k, fp in zip(okeys, devigged):
-                fair_probs[k] = fp
-        else:
-            # Fallback: consensus across all books (median implied prob), then Power devig
-            for okey, entries in outcomes.items():
-                probs = sorted([p for _, p in entries])
-                median = probs[len(probs) // 2]  # simple median
-                fair_probs[okey] = median
-            okeys = list(fair_probs.keys())
-            raw = [fair_probs[k] for k in okeys]
-            devigged = _power_devig(raw)
-            for k, fp in zip(okeys, devigged):
-                fair_probs[k] = fp
+            if weight_sum > 0 and values:
+                fair_p = weighted_sum / weight_sum
+                n_books = len(values)
+                spread = max(values) - min(values) if n_books > 1 else 0
+                mean = sum(values) / n_books
+                stdev = (sum((v - mean) ** 2 for v in values) / n_books) ** 0.5 if n_books > 1 else 0
+                avg_overround = sum(d["overround"] for d in devigged_by_book.values()) / len(devigged_by_book)
 
-        fair_index[(event_key, mtype)] = fair_probs
+                fair_probs[ok] = fair_p
+                meta[ok] = {
+                    "fair_prob": fair_p,
+                    "spread": round(spread, 4),
+                    "stdev": round(stdev, 4),
+                    "n_books": n_books,
+                    "source_books": source_books,
+                    "overround": round(avg_overround, 4),
+                }
+
+        if not fair_probs:
+            continue
+
+        # Renormalize so fair probs sum to 1.0
+        total = sum(fair_probs.values())
+        if total > 0 and abs(total - 1.0) > 1e-9:
+            for ok in fair_probs:
+                fair_probs[ok] /= total
+                if ok in meta:
+                    meta[ok]["fair_prob"] = fair_probs[ok]
+
+        fair_probs["_meta"] = meta
+        fair_index[market_key] = fair_probs
 
     return fair_index
+
+
+def compute_arb_3way(prob_a, prob_b, prob_c, bankroll=100):
+    """
+    Compute stake allocation for a 3-way arbitrage (e.g. soccer h2h).
+    prob_a/b/c are implied probabilities from the best price on each outcome.
+    Returns dict with stakes, profit, and roi — or None if no arb exists.
+    """
+    cost = prob_a + prob_b + prob_c
+    if cost >= 1.0:
+        return None  # no arb
+
+    # Stakes proportional to probability so each outcome pays the same total
+    target_payout = bankroll
+    stake_a = round(target_payout * prob_a, 2)
+    stake_b = round(target_payout * prob_b, 2)
+    stake_c = round(target_payout * prob_c, 2)
+    total_staked = round(stake_a + stake_b + stake_c, 2)
+    profit = round(target_payout - total_staked, 2)
+    roi = round((profit / total_staked) * 100, 3) if total_staked > 0 else 0
+
+    return {
+        "stake_a": stake_a,
+        "stake_b": stake_b,
+        "stake_c": stake_c,
+        "total_staked": total_staked,
+        "profit": profit,
+        "roi": roi,
+    }
+
+
+def compute_adaptive_kelly(fair_prob, b, ev_pct, match_confidence=1.0,
+                           n_books=1, is_live=False, alpha_base=0.5):
+    """
+    Adaptive fractional Kelly (Uhrín/Hubáček 2021).
+    Scales Kelly fraction by confidence: f_adaptive = f_full × alpha_base × C
+    where C = min(1, C_match × C_books × C_edge × C_time).
+
+    Returns dict with kelly_adaptive, kelly_confidence, and component breakdown.
+    """
+    import math
+
+    if b <= 0 or fair_prob <= 0 or fair_prob >= 1:
+        return {"kelly_adaptive": 0, "kelly_confidence": 0, "full_kelly": 0}
+
+    q = 1.0 - fair_prob
+    full_kelly = max(0, (b * fair_prob - q) / b)
+
+    # Confidence components
+    c_match = max(0.1, min(1.0, match_confidence))
+    c_books = min(1.0, n_books / 4.0)
+    c_edge = 1.0 if ev_pct <= 15 else max(0.2, 1.0 - (ev_pct - 15.0) / 30.0)
+    c_time = 0.7 if is_live else 1.0
+
+    C = min(1.0, c_match * c_books * c_edge * c_time)
+    kelly_adaptive = full_kelly * alpha_base * C
+
+    return {
+        "kelly_adaptive": round(kelly_adaptive, 6),
+        "kelly_confidence": round(C, 4),
+        "full_kelly": round(full_kelly, 6),
+        "c_match": round(c_match, 4),
+        "c_books": round(c_books, 4),
+        "c_edge": round(c_edge, 4),
+        "c_time": round(c_time, 4),
+    }
+
+
+def compute_edge_quality_score(fair_prob, b, kelly_f, confidence, liquidity=0):
+    """
+    Edge Quality Score (Hubáček 2019 + Uhrín 2021).
+    G = p×ln(1+b×f) + (1−p)×ln(1−f)  (Kelly growth rate per bet)
+    EQS = G × C × liquidity_factor
+
+    Returns dict with eqs, growth_rate, and bets_to_double.
+    """
+    import math
+
+    if b <= 0 or fair_prob <= 0 or fair_prob >= 1 or kelly_f <= 0:
+        return {"eqs": 0, "growth_rate": 0, "bets_to_double": 0}
+
+    p = fair_prob
+    q = 1.0 - p
+    f = kelly_f
+
+    # Clamp f to avoid log(0) or log(negative)
+    f = min(f, 0.99)
+    bf = b * f
+    if bf <= -1 or f >= 1:
+        return {"eqs": 0, "growth_rate": 0, "bets_to_double": 0}
+
+    growth_rate = p * math.log(1.0 + bf) + q * math.log(1.0 - f)
+
+    # Liquidity factor: log-scaled, maxes at ~$10,000
+    liq_factor = min(1.0, math.log10(max(liquidity, 1)) / 4.0) if liquidity > 0 else 0.5
+
+    eqs = growth_rate * confidence * liq_factor
+    bets_to_double = math.log(2) / growth_rate if growth_rate > 0 else 0
+
+    return {
+        "eqs": round(eqs, 6),
+        "growth_rate": round(growth_rate, 6),
+        "bets_to_double": round(bets_to_double, 1),
+    }
+
+
+def compute_risk_score(ev_pct, n_books=1, consensus_spread=0, match_confidence=1.0,
+                       is_live=False):
+    """
+    Multi-factor risk score (0–100), replacing simple low/medium/high.
+    Lower = less risky. Factors: edge size, book count, disagreement, confidence, live status.
+    """
+    score = 30  # base
+    if ev_pct > 15:
+        score += min(20, (ev_pct - 15) * 2)
+    if ev_pct > 25:
+        score += 15
+    score -= min(15, n_books * 3)
+    score += min(15, consensus_spread * 100)
+    if match_confidence < 0.8:
+        score += 10
+    if is_live:
+        score += 10
+    if n_books <= 1:
+        score += 10
+    return max(0, min(100, round(score)))
+
+
+def risk_score_label(score):
+    if score <= 25:
+        return "low"
+    elif score <= 50:
+        return "medium"
+    elif score <= 75:
+        return "high"
+    return "very_high"
 
 
 def compute_ev(price, fair_prob, fee_rate=0.0):
@@ -1747,7 +2013,7 @@ def find_ev_opportunities(prediction_markets, sportsbook_entries, fair_index, mi
             pred_price = no_price
             pred_side_raw = "No"
             # We need fair prob of the "other" outcome (NOT the sb outcome)
-            other_keys = [k for k in fair_probs if k != outcome_key]
+            other_keys = [k for k in fair_probs if k != outcome_key and not k.startswith("_")]
             if not other_keys:
                 continue
             fair_prob = fair_probs.get(other_keys[0], 0)
@@ -1759,6 +2025,15 @@ def find_ev_opportunities(prediction_markets, sportsbook_entries, fair_index, mi
         if fair_prob <= 0:
             continue
 
+        # Extract consensus metadata from weighted multi-book devig
+        fair_meta = fair_probs.get("_meta", {})
+        outcome_meta = fair_meta.get(outcome_key, {}) if fair_meta else {}
+        n_books = outcome_meta.get("n_books", 1)
+        consensus_spread = outcome_meta.get("spread", 0)
+        consensus_stdev = outcome_meta.get("stdev", 0)
+        source_books = outcome_meta.get("source_books", [])
+        overround = outcome_meta.get("overround", 0)
+
         pred_fee = (KALSHI_FEE_COEFF * pred_price) if is_kalshi else POLYMARKET_FEE
         ev = compute_ev(pred_price, fair_prob, pred_fee)
         if ev is None or ev < min_ev_pct:
@@ -1766,10 +2041,23 @@ def find_ev_opportunities(prediction_markets, sportsbook_entries, fair_index, mi
         if ev > 30:
             continue  # almost certainly stale data
 
-        # Compute half-Kelly fraction for sorting/sizing
+        # Compute Kelly fractions
         gross_payout = 1.0 / pred_price if pred_price > 0 else 0
         b = (gross_payout - 1.0) * (1.0 - pred_fee) if gross_payout > 1 else 0
         kelly_f = max(0, (b * fair_prob - (1.0 - fair_prob)) / b) / 2.0 if b > 0 else 0
+
+        # Adaptive Kelly (confidence-weighted)
+        adaptive = compute_adaptive_kelly(
+            fair_prob, b, ev, match_confidence=confidence,
+            n_books=n_books, is_live=is_live
+        )
+
+        # Edge Quality Score
+        eqs_data = compute_edge_quality_score(
+            fair_prob, b, adaptive.get("kelly_adaptive", kelly_f),
+            adaptive.get("kelly_confidence", 0.5),
+            liquidity=pred.get("liquidity", 0)
+        )
 
         # Build side labels
         pred_line = pred.get("_floor_strike")
@@ -1866,10 +2154,21 @@ def find_ev_opportunities(prediction_markets, sportsbook_entries, fair_index, mi
             "net_arb_pct": round(ev, 3),
             "ev_pct": round(ev, 3),
             "kelly_fraction": round(kelly_f, 6),
+            "kelly_adaptive": adaptive.get("kelly_adaptive", kelly_f),
+            "kelly_confidence": adaptive.get("kelly_confidence", 0.5),
+            "edge_quality_score": eqs_data.get("eqs", 0),
+            "growth_rate": eqs_data.get("growth_rate", 0),
+            "bets_to_double": eqs_data.get("bets_to_double", 0),
             "consensus_prob": round(fair_prob, 4),
             "match_confidence": round(confidence, 2),
-            "resolution_risk": "medium",
-            "risk_note": f"+EV bet: {round(ev, 1)}% edge vs consensus fair odds. Not a guaranteed arb — variance applies.",
+            "n_books": n_books,
+            "consensus_spread": round(consensus_spread, 4),
+            "consensus_stdev": round(consensus_stdev, 4),
+            "source_books": source_books,
+            "overround": round(overround, 4),
+            "risk_score": compute_risk_score(ev, n_books, consensus_spread, confidence, is_live),
+            "resolution_risk": risk_score_label(compute_risk_score(ev, n_books, consensus_spread, confidence, is_live)),
+            "risk_note": f"+EV bet: {round(ev, 1)}% edge vs consensus fair odds ({n_books} books). Not a guaranteed arb — variance applies.",
             "is_prop": sb.get("is_prop", False),
             "liquidity": pred.get("liquidity", 0),
             "volume": pred.get("volume", 0),
@@ -1911,7 +2210,204 @@ def find_cross_sportsbook_opportunities(sportsbook_entries, fair_index, min_ev_p
         if len(outcomes) < 2:
             continue
 
-        # For h2h: two team names. For totals: Over/Under.
+        # ── 3-way market detection (soccer h2h: Home/Draw/Away) ──
+        is_3way = mtype == "h2h" and len(outcomes) >= 3
+
+        if is_3way:
+            # 3-way arb: find best price for each outcome, check if sum < 1.0
+            best_per_outcome = []
+            for oname in outcomes[:3]:  # only first 3 outcomes
+                entries = outcome_map[oname]
+                best = min(entries, key=lambda x: x.get("implied_prob", 1))
+                prob = best.get("implied_prob", 0)
+                if prob <= 0 or prob >= 1:
+                    break
+                best_per_outcome.append((oname, best, prob))
+
+            if len(best_per_outcome) == 3:
+                prob_a = best_per_outcome[0][2]
+                prob_b = best_per_outcome[1][2]
+                prob_c = best_per_outcome[2][2]
+                cost = prob_a + prob_b + prob_c
+
+                # Check that not all from same book
+                books = {best_per_outcome[k][1].get("bookmaker") for k in range(3)}
+
+                if cost < 1.0 and len(books) >= 2:
+                    gross_pct = (1.0 - cost) * 100
+                    if gross_pct <= 15:  # filter stale data
+                        best_a_entry = best_per_outcome[0][1]
+                        best_b_entry = best_per_outcome[1][1]
+                        best_c_entry = best_per_outcome[2][1]
+
+                        commence = best_a_entry.get("commence_time", "")
+                        is_live = False
+                        time_display = ""
+                        if commence:
+                            try:
+                                event_time = datetime.fromisoformat(commence.replace("Z", "+00:00"))
+                                now = datetime.now(timezone.utc)
+                                if event_time < now:
+                                    is_live = True
+                                    time_display = "LIVE"
+                                else:
+                                    delta = event_time - now
+                                    if delta.days > 0: time_display = f"{delta.days}d"
+                                    elif delta.seconds > 3600: time_display = f"{delta.seconds // 3600}h"
+                                    else: time_display = f"{delta.seconds // 60}m"
+                            except Exception:
+                                pass
+
+                        sport = best_a_entry.get("sport", "").replace("_", " ").upper()
+                        if "soccer" in sport.lower() or "mls" in sport.lower() or "epl" in sport.lower():
+                            sport_display = "Soccer"
+                        else:
+                            sport_display = sport[:10] if sport else "Sports"
+
+                        opp = {
+                            "id": hashlib.md5(f"xsb3-{event_key}-{mtype}-{'|'.join(outcomes[:3])}".encode()).hexdigest()[:12],
+                            "type": "arb",
+                            "n_sides": 3,
+                            "sport": sport_display,
+                            "event": f"{event_key.replace('@', ' @ ')} — ML (3-way)",
+                            "event_detail": f"3-way sportsbook arb: {best_a_entry.get('bookmaker_title', '')} / {best_b_entry.get('bookmaker_title', '')} / {best_c_entry.get('bookmaker_title', '')}",
+                            "commence_time": commence,
+                            "time_display": time_display,
+                            "is_live": is_live,
+                            "platform_a": {
+                                "name": best_a_entry.get("bookmaker_title", best_a_entry.get("bookmaker", "")),
+                                "side": best_per_outcome[0][0],
+                                "price": best_a_entry.get("american_odds", 0),
+                                "implied_prob": round(prob_a, 4),
+                                "american_odds": best_a_entry.get("american_odds", 0),
+                                "fee_pct": 0,
+                                "url": "",
+                                "market_id": "",
+                            },
+                            "platform_b": {
+                                "name": best_b_entry.get("bookmaker_title", best_b_entry.get("bookmaker", "")),
+                                "side": best_per_outcome[1][0],
+                                "price": best_b_entry.get("american_odds", 0),
+                                "implied_prob": round(prob_b, 4),
+                                "american_odds": best_b_entry.get("american_odds", 0),
+                                "fee_pct": 0,
+                                "url": "",
+                                "market_id": "",
+                            },
+                            "platform_c": {
+                                "name": best_c_entry.get("bookmaker_title", best_c_entry.get("bookmaker", "")),
+                                "side": best_per_outcome[2][0],
+                                "price": best_c_entry.get("american_odds", 0),
+                                "implied_prob": round(prob_c, 4),
+                                "american_odds": best_c_entry.get("american_odds", 0),
+                                "fee_pct": 0,
+                                "url": "",
+                                "market_id": "",
+                            },
+                            "market_type": mtype,
+                            "gross_arb_pct": round(gross_pct, 3),
+                            "net_arb_pct": round(gross_pct, 3),
+                            "ev_pct": 0,
+                            "consensus_prob": 0,
+                            "match_confidence": 1.0,
+                            "resolution_risk": "low",
+                            "risk_note": "3-way sportsbook arb — all outcomes covered across bookmakers.",
+                            "is_prop": best_a_entry.get("is_prop", False),
+                            "liquidity": 0,
+                            "volume": 0,
+                        }
+                        opportunities.append(opp)
+
+            # Skip pairwise arb checks for 3-way markets — they are never true 2-way arbs
+            # Still check for +EV on individual outcomes below
+            fair_probs = fair_index.get((event_key, mtype))
+            if fair_probs:
+                for oname in outcomes:
+                    entries = outcome_map[oname]
+                    best = min(entries, key=lambda x: x.get("implied_prob", 1))
+                    prob = best.get("implied_prob", 0)
+                    if prob <= 0 or prob >= 1:
+                        continue
+                    outcome_key = f"{oname}|{point}" if point is not None else oname
+                    fair_p = fair_probs.get(outcome_key, 0)
+                    if fair_p <= 0:
+                        continue
+                    ev = compute_ev(prob, fair_p)
+                    if ev is None or ev < min_ev_pct or ev > 30:
+                        continue
+
+                    xsb_payout = 1.0 / prob if prob > 0 else 0
+                    xsb_b = (xsb_payout - 1.0) if xsb_payout > 1 else 0
+                    xsb_kelly = max(0, (xsb_b * fair_p - (1.0 - fair_p)) / xsb_b) / 2.0 if xsb_b > 0 else 0
+
+                    commence = best.get("commence_time", "")
+                    is_live = False
+                    time_display = ""
+                    if commence:
+                        try:
+                            event_time = datetime.fromisoformat(commence.replace("Z", "+00:00"))
+                            now = datetime.now(timezone.utc)
+                            if event_time < now:
+                                is_live = True
+                                time_display = "LIVE"
+                            else:
+                                delta = event_time - now
+                                if delta.days > 0: time_display = f"{delta.days}d"
+                                elif delta.seconds > 3600: time_display = f"{delta.seconds // 3600}h"
+                                else: time_display = f"{delta.seconds // 60}m"
+                        except Exception:
+                            pass
+
+                    sport_display = "Soccer"
+                    side_label = oname
+
+                    opp = {
+                        "id": hashlib.md5(f"xev3-{event_key}-{mtype}-{oname}-{best.get('bookmaker','')}".encode()).hexdigest()[:12],
+                        "type": "ev",
+                        "sport": sport_display,
+                        "event": f"{event_key.replace('@', ' @ ')} — ML (3-way)",
+                        "event_detail": f"+EV: {best.get('bookmaker_title', '')} {side_label} vs consensus fair odds",
+                        "commence_time": commence,
+                        "time_display": time_display,
+                        "is_live": is_live,
+                        "platform_a": {
+                            "name": best.get("bookmaker_title", best.get("bookmaker", "")),
+                            "side": side_label,
+                            "price": best.get("american_odds", 0),
+                            "implied_prob": round(prob, 4),
+                            "american_odds": best.get("american_odds", 0),
+                            "fee_pct": 0,
+                            "url": "",
+                            "market_id": "",
+                        },
+                        "platform_b": {
+                            "name": "Consensus",
+                            "side": f"Fair: {round(fair_p * 100, 1)}%",
+                            "price": 0,
+                            "implied_prob": round(fair_p, 4),
+                            "american_odds": implied_prob_to_american(fair_p),
+                            "fee_pct": 0,
+                            "url": "",
+                            "market_id": "",
+                        },
+                        "market_type": mtype,
+                        "gross_arb_pct": 0,
+                        "net_arb_pct": round(ev, 3),
+                        "ev_pct": round(ev, 3),
+                        "kelly_fraction": round(xsb_kelly, 6),
+                        "consensus_prob": round(fair_p, 4),
+                        "match_confidence": 1.0,
+                        "resolution_risk": "medium",
+                        "risk_note": f"+EV bet (3-way market): {round(ev, 1)}% edge vs devigged consensus.",
+                        "is_prop": best.get("is_prop", False),
+                        "liquidity": 0,
+                        "volume": 0,
+                    }
+                    opportunities.append(opp)
+
+            continue  # skip pairwise loop for 3-way markets
+
+        # ── 2-way market arb checks (h2h binary, totals, spreads) ──
         for i in range(len(outcomes)):
             for j in range(i + 1, len(outcomes)):
                 side_a_entries = outcome_map[outcomes[i]]
@@ -2024,6 +2520,9 @@ def find_cross_sportsbook_opportunities(sportsbook_entries, fair_index, min_ev_p
                     if not fair_probs:
                         continue
 
+                    # Extract consensus metadata
+                    xsb_fair_meta = fair_probs.get("_meta", {})
+
                     # Check each side for +EV
                     for side_idx, (best, outcome_name) in enumerate([(best_a, outcomes[i]), (best_b, outcomes[j])]):
                         prob = best.get("implied_prob", 0)
@@ -2032,14 +2531,34 @@ def find_cross_sportsbook_opportunities(sportsbook_entries, fair_index, min_ev_p
                         if fair_p <= 0:
                             continue
 
+                        # Get per-outcome metadata
+                        o_meta = xsb_fair_meta.get(outcome_key, {})
+                        xsb_n_books = o_meta.get("n_books", 1)
+                        xsb_spread = o_meta.get("spread", 0)
+                        xsb_stdev = o_meta.get("stdev", 0)
+                        xsb_source_books = o_meta.get("source_books", [])
+                        xsb_overround = o_meta.get("overround", 0)
+
                         ev = compute_ev(prob, fair_p)
                         if ev is None or ev < min_ev_pct or ev > 30:
                             continue
 
-                        # Compute half-Kelly fraction
+                        # Compute Kelly fractions
                         xsb_payout = 1.0 / prob if prob > 0 else 0
                         xsb_b = (xsb_payout - 1.0) if xsb_payout > 1 else 0
                         xsb_kelly = max(0, (xsb_b * fair_p - (1.0 - fair_p)) / xsb_b) / 2.0 if xsb_b > 0 else 0
+
+                        # Adaptive Kelly
+                        xsb_adaptive = compute_adaptive_kelly(
+                            fair_p, xsb_b, ev, match_confidence=1.0,
+                            n_books=xsb_n_books, is_live=is_live
+                        )
+
+                        # Edge Quality Score
+                        xsb_eqs = compute_edge_quality_score(
+                            fair_p, xsb_b, xsb_adaptive.get("kelly_adaptive", xsb_kelly),
+                            xsb_adaptive.get("kelly_confidence", 0.5)
+                        )
 
                         commence = best.get("commence_time", "")
                         is_live = False
@@ -2114,10 +2633,21 @@ def find_cross_sportsbook_opportunities(sportsbook_entries, fair_index, min_ev_p
                             "net_arb_pct": round(ev, 3),
                             "ev_pct": round(ev, 3),
                             "kelly_fraction": round(xsb_kelly, 6),
+                            "kelly_adaptive": xsb_adaptive.get("kelly_adaptive", xsb_kelly),
+                            "kelly_confidence": xsb_adaptive.get("kelly_confidence", 0.5),
+                            "edge_quality_score": xsb_eqs.get("eqs", 0),
+                            "growth_rate": xsb_eqs.get("growth_rate", 0),
+                            "bets_to_double": xsb_eqs.get("bets_to_double", 0),
                             "consensus_prob": round(fair_p, 4),
                             "match_confidence": 1.0,
-                            "resolution_risk": "medium",
-                            "risk_note": f"+EV bet: {round(ev, 1)}% edge vs devigged consensus. Variance applies — use Kelly sizing.",
+                            "n_books": xsb_n_books,
+                            "consensus_spread": round(xsb_spread, 4),
+                            "consensus_stdev": round(xsb_stdev, 4),
+                            "source_books": xsb_source_books,
+                            "overround": round(xsb_overround, 4),
+                            "risk_score": compute_risk_score(ev, xsb_n_books, xsb_spread, 1.0, is_live),
+                            "resolution_risk": risk_score_label(compute_risk_score(ev, xsb_n_books, xsb_spread, 1.0, is_live)),
+                            "risk_note": f"+EV bet: {round(ev, 1)}% edge vs devigged consensus ({xsb_n_books} books).",
                             "is_prop": best.get("is_prop", False),
                             "liquidity": 0,
                             "volume": 0,
@@ -2211,9 +2741,10 @@ def run_scan(params):
         all_opportunities.extend(cross_arbs)
 
     # +EV detection: build fair odds index, find +EV opportunities
+    devig_method = get_config(db, "devig_method", "power")
     fair_index = {}
     if sportsbook_entries:
-        fair_index = build_fair_odds_index(sportsbook_entries)
+        fair_index = build_fair_odds_index(sportsbook_entries, devig_method=devig_method)
 
         # +EV: prediction markets vs fair odds
         if poly_markets:

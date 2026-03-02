@@ -349,6 +349,11 @@ function applyFilters() {
         va = a.type === "ev" ? (a.kelly_fraction || 0) : (a.net_arb_pct || 0);
         vb = b.type === "ev" ? (b.kelly_fraction || 0) : (b.net_arb_pct || 0);
         break;
+      case "eqs":
+        // Edge Quality Score: arbs first (by net%), +EV by composite quality
+        va = a.type === "ev" ? (a.edge_quality_score || 0) : (a.net_arb_pct || 0);
+        vb = b.type === "ev" ? (b.edge_quality_score || 0) : (b.net_arb_pct || 0);
+        break;
       case "ev_raw":
         va = a.type === "ev" ? (a.ev_pct || 0) : (a.net_arb_pct || 0);
         vb = b.type === "ev" ? (b.ev_pct || 0) : (b.net_arb_pct || 0);
@@ -498,6 +503,8 @@ function renderStakes(opp, bankroll) {
   bankroll = parseFloat(bankroll) || 100;
   const pa = opp.platform_a.implied_prob;
   const pb = opp.platform_b.implied_prob;
+  const is3Way = opp.n_sides === 3 && opp.platform_c;
+  const pc = is3Way ? opp.platform_c.implied_prob : 0;
 
   if (!pa || !pb || pa <= 0 || pb <= 0) {
     return '<div style="color:var(--text-dim);font-size:0.72rem">Insufficient data for stake calculation</div>';
@@ -505,34 +512,120 @@ function renderStakes(opp, bankroll) {
 
   const stakeA = (bankroll * pa).toFixed(2);
   const stakeB = (bankroll * pb).toFixed(2);
-  const totalStaked = (parseFloat(stakeA) + parseFloat(stakeB)).toFixed(2);
-  const profit = (bankroll - parseFloat(totalStaked)).toFixed(2);
-  const roi = ((profit / totalStaked) * 100).toFixed(2);
+  let totalStaked, profit, roi;
 
-  return `
+  let html = `
     <div class="stake-line"><span class="label">Stake on ${escapeHtml(opp.platform_a.name)} (${escapeHtml(opp.platform_a.side)}):</span><span class="value">${formatMoney(stakeA)}</span></div>
     <div class="stake-line"><span class="label">Stake on ${escapeHtml(opp.platform_b.name)} (${escapeHtml(opp.platform_b.side)}):</span><span class="value">${formatMoney(stakeB)}</span></div>
+  `;
+
+  if (is3Way && pc > 0) {
+    const stakeC = (bankroll * pc).toFixed(2);
+    totalStaked = (parseFloat(stakeA) + parseFloat(stakeB) + parseFloat(stakeC)).toFixed(2);
+    profit = (bankroll - parseFloat(totalStaked)).toFixed(2);
+    roi = ((profit / totalStaked) * 100).toFixed(2);
+    html += `<div class="stake-line"><span class="label">Stake on ${escapeHtml(opp.platform_c.name)} (${escapeHtml(opp.platform_c.side)}):</span><span class="value">${formatMoney(stakeC)}</span></div>`;
+  } else {
+    totalStaked = (parseFloat(stakeA) + parseFloat(stakeB)).toFixed(2);
+    profit = (bankroll - parseFloat(totalStaked)).toFixed(2);
+    roi = ((profit / totalStaked) * 100).toFixed(2);
+  }
+
+  html += `
     <div class="stake-line total"><span class="label">Total staked:</span><span class="value">${formatMoney(totalStaked)}</span></div>
-    <div class="stake-line"><span class="label">Payout (either outcome):</span><span class="value">${formatMoney(bankroll)}</span></div>
+    <div class="stake-line"><span class="label">Total return (any outcome):</span><span class="value">${formatMoney(bankroll)}</span></div>
+    <div class="stake-line"><span class="label">Your ${formatMoney(totalStaked)} wagered returns ${formatMoney(bankroll)} whichever side wins</span></div>
     <div class="stake-line"><span class="label">Guaranteed profit:</span><span class="value green">${formatMoney(profit)} (${roi}%)</span></div>
   `;
+  return html;
+}
+
+function computeRiskScore(opp) {
+  // Multi-factor risk score (0-100, lower = less risky)
+  let score = 30; // base
+  const ev = opp.ev_pct || 0;
+  if (ev > 15) score += Math.min(20, (ev - 15) * 2);          // large edges = stale risk
+  if (ev > 25) score += 15;
+  const nBooks = opp.n_books || 1;
+  score -= Math.min(15, nBooks * 3);                            // more books = safer
+  const spread = opp.consensus_spread || 0;
+  score += Math.min(15, spread * 100);                          // high disagreement = risky
+  if (opp.match_confidence < 0.8) score += 10;                  // low match confidence
+  if (opp.is_live) score += 10;                                 // live = faster movement
+  if (nBooks <= 1) score += 10;                                 // single source = uncertain
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+function riskScoreLabel(score) {
+  if (score <= 25) return { text: "Low", color: "var(--green)" };
+  if (score <= 50) return { text: "Medium", color: "var(--yellow)" };
+  if (score <= 75) return { text: "High", color: "var(--orange, #ff9900)" };
+  return { text: "Very High", color: "var(--red, #ff4444)" };
+}
+
+function renderEdgeMetrics(opp) {
+  const nBooks = opp.n_books || 0;
+  const spread = opp.consensus_spread || 0;
+  const growthRate = opp.growth_rate || 0;
+  const betsToDouble = opp.bets_to_double || 0;
+  const eqs = opp.edge_quality_score || 0;
+  const sourceBooks = opp.source_books || [];
+  const overround = opp.overround || 0;
+  const riskScore = computeRiskScore(opp);
+  const risk = riskScoreLabel(riskScore);
+
+  // 2A: Book agreement
+  const agreementLabel = spread < 0.02 ? "High" : spread < 0.05 ? "Medium" : "Low";
+  const agreementColor = spread < 0.02 ? "var(--green)" : spread < 0.05 ? "var(--yellow)" : "var(--red, #ff4444)";
+
+  let html = '<div style="margin-top:10px;font-size:0.65rem;line-height:1.8;color:var(--text-dim)">';
+
+  // 2A: Book Consensus Spread
+  if (nBooks > 0) {
+    html += `<div><strong>Book agreement:</strong> <span style="color:${agreementColor};font-weight:600">${agreementLabel}</span> (${nBooks} book${nBooks !== 1 ? 's' : ''}, spread: ${(spread * 100).toFixed(1)}%)</div>`;
+  }
+
+  // 2B: Fair Value Source Attribution
+  if (sourceBooks.length > 0) {
+    const bookList = sourceBooks.slice(0, 4).map(b => escapeHtml(b)).join(', ');
+    const vigRemoved = overround > 1 ? ((overround - 1) * 100).toFixed(1) + '% vig removed' : '';
+    html += `<div><strong>Fair value source:</strong> ${bookList}${vigRemoved ? ' (' + vigRemoved + ')' : ''}</div>`;
+  }
+
+  // 2C: Enhanced Risk Classification
+  html += `<div><strong>Risk score:</strong> <span style="color:${risk.color};font-weight:600">${riskScore}/100 (${risk.text})</span></div>`;
+
+  // 2D: Expected Growth Rate
+  if (growthRate > 0) {
+    html += `<div><strong>Growth per bet:</strong> +${(growthRate * 100).toFixed(3)}%`;
+    if (betsToDouble > 0 && betsToDouble < 100000) {
+      html += ` (~${Math.round(betsToDouble)} similar bets to double bankroll)`;
+    }
+    html += '</div>';
+  }
+
+  // EQS
+  if (eqs > 0) {
+    html += `<div><strong>Edge Quality Score:</strong> ${(eqs * 10000).toFixed(1)}</div>`;
+  }
+
+  html += '</div>';
+  return html;
 }
 
 function renderArbDetail(opp) {
   const bankroll = state.config.default_bankroll || 100;
   const stakeA = (bankroll * opp.platform_a.implied_prob).toFixed(2);
   const stakeB = (bankroll * opp.platform_b.implied_prob).toFixed(2);
-  return `
-    <div class="detail-explainer arb-explainer">
-      <div class="explainer-label">GUARANTEED ARBITRAGE</div>
-      <div class="explainer-text">
-        Bet both sides across two platforms. No matter who wins, you profit <strong style="color:var(--green)">${formatPct(opp.net_arb_pct)}</strong> after fees.
-      </div>
-    </div>
-    <div class="detail-grid">
-      <div class="detail-section">
-        <h4>What To Do</h4>
-        <div class="action-steps">
+  const is3Way = opp.n_sides === 3 && opp.platform_c;
+  const stakeC = is3Way ? (bankroll * opp.platform_c.implied_prob).toFixed(2) : "0";
+  const totalStaked = is3Way
+    ? (parseFloat(stakeA) + parseFloat(stakeB) + parseFloat(stakeC))
+    : (parseFloat(stakeA) + parseFloat(stakeB));
+  const profit = bankroll - totalStaked;
+  const sidesLabel = is3Way ? "all three outcomes across bookmakers" : "both sides across two platforms";
+
+  let stepsHtml = `
           <div class="action-step">
             <span class="step-num">1</span>
             <div class="step-body">
@@ -548,14 +641,42 @@ function renderArbDetail(opp) {
               <div class="step-detail">${escapeHtml(opp.platform_b.side)} @ ${formatProb(opp.platform_b.implied_prob)} (${formatOdds(opp.platform_b.american_odds)})</div>
               ${opp.platform_b.url ? `<a class="step-link" href="${opp.platform_b.url}" target="_blank" rel="noopener noreferrer">Open ${escapeHtml(opp.platform_b.name)} &rarr;</a>` : ""}
             </div>
-          </div>
+          </div>`;
+
+  if (is3Way) {
+    stepsHtml += `
           <div class="action-step">
             <span class="step-num">3</span>
             <div class="step-body">
-              <div class="step-title">Collect <strong style="color:var(--green)">${formatMoney(bankroll - parseFloat(stakeA) - parseFloat(stakeB))}</strong> guaranteed profit</div>
-              <div class="step-detail">Total staked: ${formatMoney(parseFloat(stakeA) + parseFloat(stakeB))} &rarr; Payout: ${formatMoney(bankroll)} (either outcome)</div>
+              <div class="step-title">Bet <strong style="color:var(--green)">${formatMoney(stakeC)}</strong> on ${escapeHtml(opp.platform_c.name)}</div>
+              <div class="step-detail">${escapeHtml(opp.platform_c.side)} @ ${formatProb(opp.platform_c.implied_prob)} (${formatOdds(opp.platform_c.american_odds)})</div>
             </div>
-          </div>
+          </div>`;
+  }
+
+  const collectStepNum = is3Way ? 4 : 3;
+  stepsHtml += `
+          <div class="action-step">
+            <span class="step-num">${collectStepNum}</span>
+            <div class="step-body">
+              <div class="step-title">Collect <strong style="color:var(--green)">${formatMoney(profit)}</strong> guaranteed profit</div>
+              <div class="step-detail">Total staked: ${formatMoney(totalStaked)} &rarr; Total return: ${formatMoney(bankroll)} (any outcome)</div>
+              <div class="step-detail" style="margin-top:4px;color:var(--text-dim)">Your ${formatMoney(totalStaked)} wagered returns ${formatMoney(bankroll)} whichever side wins</div>
+            </div>
+          </div>`;
+
+  return `
+    <div class="detail-explainer arb-explainer">
+      <div class="explainer-label">GUARANTEED ARBITRAGE${is3Way ? " (3-WAY)" : ""}</div>
+      <div class="explainer-text">
+        Bet ${sidesLabel}. No matter who wins, you profit <strong style="color:var(--green)">${formatPct(opp.net_arb_pct)}</strong> after fees.
+      </div>
+    </div>
+    <div class="detail-grid">
+      <div class="detail-section">
+        <h4>What To Do</h4>
+        <div class="action-steps">
+          ${stepsHtml}
         </div>
         <div class="stake-input-row" style="margin-top:14px">
           <label>Bankroll: $</label>
@@ -570,6 +691,7 @@ function renderArbDetail(opp) {
         <table class="fee-table">
           <tr><td>${escapeHtml(opp.platform_a.name)} fee</td><td>${opp.platform_a.fee_pct.toFixed(1)}%</td></tr>
           <tr><td>${escapeHtml(opp.platform_b.name)} fee</td><td>${opp.platform_b.fee_pct.toFixed(1)}%</td></tr>
+          ${is3Way ? `<tr><td>${escapeHtml(opp.platform_c.name)} fee</td><td>${opp.platform_c.fee_pct.toFixed(1)}%</td></tr>` : ""}
           <tr><td>Gross arb</td><td style="color:var(--green)">${formatPct(opp.gross_arb_pct)}</td></tr>
           <tr><td>Net arb (after fees)</td><td style="color:${opp.net_arb_pct >= 1 ? 'var(--green)' : 'var(--yellow)'}">${formatPct(opp.net_arb_pct)}</td></tr>
         </table>
@@ -582,10 +704,13 @@ function renderArbDetail(opp) {
       <div class="detail-section">
         <h4>How Arbs Work</h4>
         <div style="font-size:0.72rem;color:var(--text-secondary);line-height:1.8">
-          <p>Two platforms disagree on the odds. By betting <strong>both sides</strong>, you lock in a profit no matter what happens.</p>
+          ${is3Way
+            ? `<p>Bookmakers disagree on the odds for a 3-way market (home win, draw, away win). By betting <strong>all three outcomes</strong> across different books, you lock in a profit no matter the result.</p>`
+            : `<p>Two platforms disagree on the odds. By betting <strong>both sides</strong>, you lock in a profit no matter what happens.</p>`
+          }
           <p style="margin-top:8px;color:var(--text-dim)">
             <strong>Event:</strong> ${escapeHtml(opp.event_detail || opp.event)}<br>
-            <strong>Type:</strong> ${escapeHtml(opp.market_type)}<br>
+            <strong>Type:</strong> ${escapeHtml(opp.market_type)}${is3Way ? " (3-way)" : ""}<br>
             ${opp.commence_time ? `<strong>Start:</strong> ${new Date(opp.commence_time).toLocaleString()}` : ""}
           </p>
         </div>
@@ -597,8 +722,11 @@ function renderArbDetail(opp) {
 function renderEVDetail(opp) {
   const bankroll = state.config.default_bankroll || 100;
   const kelly = computeKelly(opp);
-  const suggestedStake = kelly.half > 0 ? formatMoney(kelly.half * bankroll) : formatMoney(bankroll * 0.05);
-  const suggestedPct = kelly.half > 0 ? (kelly.half * 100).toFixed(1) + "%" : "5%";
+  const useAdaptive = kelly.adaptive > 0;
+  const suggestedFraction = useAdaptive ? kelly.adaptive : (kelly.half > 0 ? kelly.half : 0.05);
+  const suggestedStake = formatMoney(suggestedFraction * bankroll);
+  const suggestedPct = (suggestedFraction * 100).toFixed(1) + "%";
+  const kellyLabel = useAdaptive ? "Adaptive Kelly" : "Half Kelly";
   return `
     <div class="detail-explainer ev-explainer">
       <div class="explainer-label">POSITIVE EXPECTED VALUE</div>
@@ -632,7 +760,7 @@ function renderEVDetail(opp) {
             <span class="step-num">3</span>
             <div class="step-body">
               <div class="step-title">Stake <strong style="color:var(--blue)">${suggestedStake}</strong> (${suggestedPct} of bankroll)</div>
-              <div class="step-detail">Half Kelly — balances growth with risk. Adjust bankroll below.</div>
+              <div class="step-detail">${kellyLabel} — balances growth with risk. Adjust bankroll below.</div>
             </div>
           </div>
         </div>
@@ -648,10 +776,12 @@ function renderEVDetail(opp) {
           <tr><td>Platform fee</td><td>${opp.platform_a.fee_pct.toFixed(1)}%</td></tr>
           <tr><td>Your edge</td><td style="color:var(--blue);font-weight:800">+${formatPct(opp.ev_pct)}</td></tr>
         </table>
+        ${renderEdgeMetrics(opp)}
         <div class="ref-explainer">
           <strong>Why is ${escapeHtml(opp.platform_b.name)} shown?</strong>
-          ${escapeHtml(opp.platform_b.name)} is <em>not</em> a bet you place — it's the reference sportsbook whose odds were used to estimate the true fair probability.
-          The fair value (${formatProb(opp.consensus_prob)}) is derived from sharp sportsbook lines with the bookmaker's margin (vig) removed. You only bet on <strong>${escapeHtml(opp.platform_a.name)}</strong>.
+          ${escapeHtml(opp.platform_b.name)} is <em>not</em> a bet you place — it's the reference line used to estimate the true fair probability.
+          The fair value (${formatProb(opp.consensus_prob)}) is derived from ${opp.n_books ? opp.n_books + ' sharp sportsbook lines' : 'sharp sportsbook lines'} with the bookmaker's margin (${opp.overround ? ((opp.overround - 1) * 100).toFixed(1) + '% vig' : 'vig'}) removed.
+          You only bet on <strong>${escapeHtml(opp.platform_a.name)}</strong>.
         </div>
         <div style="margin-top:8px;font-size:0.65rem;color:var(--text-dim);line-height:1.6">
           A +${formatPct(opp.ev_pct)} edge means for every $100 wagered, you expect ~$${(opp.ev_pct).toFixed(0)} profit on average.
@@ -667,9 +797,9 @@ function renderEVDetail(opp) {
           ${renderKellyCards(kelly, bankroll)}
         </div>
         <div style="margin-top:10px;font-size:0.62rem;color:var(--text-dim);line-height:1.6">
-          <strong>Full Kelly</strong> = max growth, high variance.<br>
-          <strong>Half Kelly</strong> = recommended — 75% of the growth, half the swings.<br>
-          <strong>Quarter Kelly</strong> = conservative — use when uncertain about the edge.
+          <strong>Adaptive Kelly</strong> = confidence-weighted — scales with edge reliability (books, spread, match).<br>
+          <strong>Half Kelly</strong> = fixed 50% of full — 75% of the growth, half the swings.<br>
+          <strong>Full Kelly</strong> = max growth, high variance — only for edges you trust completely.
         </div>
       </div>
     </div>
@@ -1017,7 +1147,7 @@ function computeKelly(opp) {
   const feeRate = (opp.platform_a.fee_pct || 0) / 100;
 
   if (!price || price <= 0 || price >= 1 || fairProb <= 0) {
-    return { full: 0, half: 0, quarter: 0 };
+    return { full: 0, half: 0, quarter: 0, adaptive: 0, confidence: 0 };
   }
 
   const grossPayout = 1.0 / price;
@@ -1025,13 +1155,20 @@ function computeKelly(opp) {
   const p = fairProb;
   const q = 1.0 - p;
 
-  if (b <= 0) return { full: 0, half: 0, quarter: 0 };
+  if (b <= 0) return { full: 0, half: 0, quarter: 0, adaptive: 0, confidence: 0 };
 
   const fullKelly = Math.max(0, (b * p - q) / b);
+
+  // Use backend adaptive Kelly if available, else fall back to half Kelly
+  const adaptive = opp.kelly_adaptive || fullKelly / 2;
+  const confidence = opp.kelly_confidence || 0.5;
+
   return {
     full: fullKelly,
     half: fullKelly / 2,
     quarter: fullKelly / 4,
+    adaptive: adaptive,
+    confidence: confidence,
   };
 }
 
@@ -1040,14 +1177,15 @@ function renderKellyCards(kelly, bankroll) {
   if (kelly.full <= 0) {
     return '<div style="color:var(--text-dim);font-size:0.72rem">Edge too small for Kelly sizing</div>';
   }
-  // Note: all values are computed from trusted internal state (numeric computations),
-  // not from user input or external strings — safe for innerHTML
+  const confPct = (kelly.confidence * 100).toFixed(0);
+  const confColor = kelly.confidence >= 0.7 ? "var(--green)" : kelly.confidence >= 0.4 ? "var(--yellow)" : "var(--red, #ff4444)";
   return `
     <div class="kelly-grid">
-      <div class="kelly-card">
-        <div class="kelly-label">Full Kelly</div>
-        <div class="kelly-value">${(kelly.full * 100).toFixed(1)}%</div>
-        <div class="kelly-amount">${formatMoney(kelly.full * bankroll)}</div>
+      <div class="kelly-card" style="border-left:3px solid var(--blue)">
+        <div class="kelly-label">Adaptive Kelly</div>
+        <div class="kelly-value" style="color:var(--blue)">${(kelly.adaptive * 100).toFixed(1)}%</div>
+        <div class="kelly-amount">${formatMoney(kelly.adaptive * bankroll)}</div>
+        <div style="font-size:0.55rem;color:var(--text-dim);margin-top:2px">Confidence: <span style="color:${confColor}">${confPct}%</span></div>
       </div>
       <div class="kelly-card">
         <div class="kelly-label">Half Kelly</div>
@@ -1055,9 +1193,9 @@ function renderKellyCards(kelly, bankroll) {
         <div class="kelly-amount">${formatMoney(kelly.half * bankroll)}</div>
       </div>
       <div class="kelly-card">
-        <div class="kelly-label">Quarter Kelly</div>
-        <div class="kelly-value">${(kelly.quarter * 100).toFixed(1)}%</div>
-        <div class="kelly-amount">${formatMoney(kelly.quarter * bankroll)}</div>
+        <div class="kelly-label">Full Kelly</div>
+        <div class="kelly-value">${(kelly.full * 100).toFixed(1)}%</div>
+        <div class="kelly-amount">${formatMoney(kelly.full * bankroll)}</div>
       </div>
     </div>
   `;
