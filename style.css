@@ -1873,9 +1873,527 @@ tr.tier-ev .step-link:hover {
   outline-offset: 2px;
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+   LEARN PAGE
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Simplified Topbar ───────────────────────────────────────────────────── */
+.topbar-learn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 28px;
+  height: 60px;
+  background: var(--bg-secondary);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border-bottom: 1px solid var(--border-primary);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.topbar-learn::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    rgba(77, 166, 255, 0.08) 15%,
+    rgba(77, 166, 255, 0.4) 50%,
+    rgba(77, 166, 255, 0.08) 85%,
+    transparent 100%
+  );
+  animation: glow-line-pulse 4s ease-in-out infinite;
+}
+
+.topbar-learn .topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.topbar-learn .back-link {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-decoration: none;
+  padding: 6px 14px;
+  background: var(--bg-glass);
+  border: 1px solid var(--border-glass);
+  border-radius: 100px;
+  transition: all 0.25s ease;
+  white-space: nowrap;
+}
+
+.topbar-learn .back-link:hover {
+  color: var(--text-bright);
+  background: var(--bg-hover);
+  border-color: var(--text-dim);
+}
+
+/* ── Learn Layout ────────────────────────────────────────────────────────── */
+.learn-body {
+  display: flex;
+  gap: 0;
+  flex: 1;
+}
+
+.learn-container {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 40px 32px 60px;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  flex: 1;
+}
+
+/* ── Anchor Nav ──────────────────────────────────────────────────────────── */
+.learn-nav {
+  position: sticky;
+  top: 60px;
+  align-self: flex-start;
+  width: 200px;
+  min-width: 200px;
+  padding: 32px 0 32px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: calc(100vh - 60px);
+  overflow-y: auto;
+}
+
+.learn-nav a {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  font-weight: 500;
+  color: var(--text-dim);
+  text-decoration: none;
+  padding: 8px 14px;
+  border-left: 2px solid transparent;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  transition: all 0.2s ease;
+  line-height: 1.4;
+}
+
+.learn-nav a:hover {
+  color: var(--text-secondary);
+  border-left-color: var(--border-highlight);
+  background: var(--bg-hover);
+}
+
+.learn-nav a.active {
+  color: var(--blue);
+  border-left-color: var(--blue);
+  background: var(--blue-bg);
+}
+
+/* ── Section Cards ───────────────────────────────────────────────────────── */
+.learn-section {
+  background: rgba(10, 18, 36, 0.7);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-lg);
+  padding: 32px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  scroll-margin-top: 80px;
+}
+
+.learn-section h2 {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: var(--blue);
+  text-transform: uppercase;
+  letter-spacing: 2.5px;
+  margin-bottom: 8px;
+}
+
+.learn-section h3 {
+  font-family: var(--font-sans);
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--text-bright);
+  margin-bottom: 20px;
+  line-height: 1.4;
+}
+
+.learn-section p {
+  font-size: 0.82rem;
+  line-height: 1.8;
+  color: var(--text-secondary);
+  margin-bottom: 16px;
+}
+
+.learn-section p:last-child { margin-bottom: 0; }
+
+.learn-section p strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* ── Hero / Intro ────────────────────────────────────────────────────────── */
+.learn-hero {
+  text-align: center;
+  padding: 24px 0 8px;
+}
+
+.learn-hero h1 {
+  font-family: var(--font-sans);
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--text-bright);
+  margin-bottom: 8px;
+}
+
+.learn-hero p {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  max-width: 500px;
+  margin: 0 auto;
+  line-height: 1.7;
+}
+
+/* ── Example Boxes ───────────────────────────────────────────────────────── */
+.learn-example {
+  background: var(--bg-glass);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  margin: 20px 0;
+}
+
+.learn-example-label {
+  font-family: var(--font-mono);
+  font-size: 0.56rem;
+  font-weight: 700;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  margin-bottom: 14px;
+}
+
+/* Two-column comparison card */
+.learn-comparison {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin: 20px 0;
+}
+
+.learn-comparison-side {
+  background: var(--bg-glass);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md);
+  padding: 18px;
+  text-align: center;
+}
+
+.learn-comparison-side.side-a {
+  border-color: var(--green-border);
+}
+
+.learn-comparison-side.side-b {
+  border-color: var(--blue-bg);
+  border-color: rgba(77, 166, 255, 0.2);
+}
+
+.learn-comparison-side .side-label {
+  font-family: var(--font-mono);
+  font-size: 0.56rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  margin-bottom: 10px;
+}
+
+.side-a .side-label { color: var(--green); }
+.side-b .side-label { color: var(--blue); }
+
+.learn-comparison-side .side-value {
+  font-family: var(--font-mono);
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--text-bright);
+  margin-bottom: 4px;
+}
+
+.learn-comparison-side .side-detail {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+
+/* Outcome rows below comparison */
+.learn-outcome {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: var(--bg-glass);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  margin-top: 10px;
+  font-size: 0.76rem;
+}
+
+.learn-outcome .outcome-label {
+  color: var(--text-secondary);
+}
+
+.learn-outcome .outcome-value {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--green);
+}
+
+/* ── Key Point Callout ───────────────────────────────────────────────────── */
+.learn-callout {
+  padding: 14px 18px;
+  border-radius: 8px;
+  border-left: 3px solid;
+  margin: 20px 0;
+  font-size: 0.8rem;
+  line-height: 1.7;
+}
+
+.learn-callout.callout-green {
+  background: rgba(0, 255, 136, 0.06);
+  border-color: var(--green);
+  color: var(--text-secondary);
+}
+
+.learn-callout.callout-blue {
+  background: rgba(77, 166, 255, 0.06);
+  border-color: var(--blue);
+  color: var(--text-secondary);
+}
+
+.learn-callout.callout-yellow {
+  background: rgba(255, 204, 0, 0.06);
+  border-color: var(--yellow);
+  color: var(--text-secondary);
+}
+
+.learn-callout strong {
+  color: var(--text-primary);
+}
+
+/* ── Comparison Table ────────────────────────────────────────────────────── */
+.comparison-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 20px 0;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.comparison-table th {
+  font-size: 0.58rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--text-dim);
+  padding: 10px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.comparison-table td {
+  padding: 10px 14px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.comparison-table tr:last-child td { border-bottom: none; }
+
+.comparison-table .val-green { color: var(--green); font-weight: 600; }
+.comparison-table .val-blue  { color: var(--blue); font-weight: 600; }
+.comparison-table .val-yellow { color: var(--yellow); font-weight: 600; }
+.comparison-table .val-dim   { color: var(--text-dim); }
+
+/* ── Collapsible (CSS-only <details>/<summary>) ──────────────────────────── */
+.learn-collapsible {
+  margin: 20px 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.learn-collapsible summary {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding: 14px 18px;
+  cursor: pointer;
+  background: var(--bg-glass);
+  transition: all 0.2s ease;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+}
+
+.learn-collapsible summary::-webkit-details-marker { display: none; }
+
+.learn-collapsible summary::before {
+  content: '▸';
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  transition: transform 0.2s ease;
+}
+
+.learn-collapsible[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.learn-collapsible summary:hover {
+  background: var(--bg-hover);
+  color: var(--text-bright);
+}
+
+.learn-collapsible .collapsible-body {
+  padding: 18px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 0.76rem;
+  line-height: 1.8;
+  color: var(--text-secondary);
+}
+
+.learn-collapsible .collapsible-body code {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--cyan);
+  background: rgba(0, 229, 255, 0.08);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.learn-collapsible .collapsible-body p {
+  margin-bottom: 12px;
+}
+
+.learn-collapsible .collapsible-body p:last-child { margin-bottom: 0; }
+
+/* ── Win Probability Color Chips ─────────────────────────────────────────── */
+.prob-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 100px;
+  margin: 4px 4px 4px 0;
+}
+
+.prob-chip.chip-green {
+  color: var(--green);
+  background: var(--green-bg);
+  border: 1px solid var(--green-border);
+}
+
+.prob-chip.chip-yellow {
+  color: var(--yellow);
+  background: var(--yellow-bg);
+  border: 1px solid var(--yellow-border);
+}
+
+.prob-chip.chip-gray {
+  color: var(--text-dim);
+  background: rgba(69, 80, 112, 0.15);
+  border: 1px solid rgba(69, 80, 112, 0.3);
+}
+
+/* ── VS Divider ──────────────────────────────────────────────────────────── */
+.vs-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin: 16px 0;
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 2px;
+}
+
+.vs-badge::before,
+.vs-badge::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border-subtle);
+}
+
+/* ── Learn Footer ────────────────────────────────────────────────────────── */
+.learn-footer {
+  padding: 24px 28px;
+  background: var(--bg-secondary);
+  backdrop-filter: var(--glass-blur);
+  border-top: 1px solid var(--border-primary);
+  text-align: center;
+}
+
+.learn-footer .footer-disclaimer {
+  font-size: 0.58rem;
+  color: var(--text-dim);
+  max-width: 720px;
+  line-height: 1.7;
+  opacity: 0.5;
+  margin: 0 auto;
+}
+
+.learn-footer .back-link-footer {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--blue);
+  text-decoration: none;
+  margin-bottom: 16px;
+  transition: color 0.2s;
+}
+
+.learn-footer .back-link-footer:hover {
+  color: var(--text-bright);
+}
+
+/* ── Learn Page Responsive ───────────────────────────────────────────────── */
+@media (max-width: 960px) {
+  .learn-nav { display: none; }
+  .learn-container { padding: 28px 20px 48px; }
+}
+
+@media (max-width: 768px) {
+  .topbar-learn { padding: 0 16px; height: auto; min-height: 52px; padding-top: 10px; padding-bottom: 10px; }
+  .topbar-learn .logo { font-size: 1rem; letter-spacing: 3px; }
+  .topbar-learn .logo-sub { display: none; }
+  .learn-container { padding: 20px 16px 40px; gap: 24px; }
+  .learn-section { padding: 24px 20px; }
+  .learn-section h3 { font-size: 1.05rem; }
+  .learn-comparison { grid-template-columns: 1fr; }
+  .learn-hero h1 { font-size: 1.3rem; }
+}
+
+@media (max-width: 480px) {
+  .learn-section { padding: 20px 16px; }
+  .topbar-learn .back-link { font-size: 0.6rem; padding: 5px 10px; }
+}
+
 /* ── Print ───────────────────────────────────────────────────────────────── */
 @media print {
   body::before, body::after { display: none; }
-  .topbar, .sidebar, .app-footer, .toast-container { display: none; }
+  .topbar, .topbar-learn, .sidebar, .app-footer, .learn-footer, .toast-container, .learn-nav { display: none; }
   .table-wrapper { box-shadow: none; border: 1px solid #ccc; }
+  .learn-section { break-inside: avoid; border: 1px solid #ccc; }
 }

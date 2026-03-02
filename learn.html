@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>How It Works — ARBSCANNER</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="./style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+</head>
+<body>
+  <div class="app-container">
+
+    <!-- ═══ TOPBAR ═══ -->
+    <header class="topbar-learn">
+      <div class="topbar-left">
+        <div>
+          <div class="logo">⚡ ARBSCANNER</div>
+          <div class="logo-sub">How It Works</div>
+        </div>
+      </div>
+      <a href="./index.html" class="back-link">← Back to Scanner</a>
+    </header>
+
+    <!-- ═══ MAIN CONTENT ═══ -->
+    <div class="learn-body">
+
+      <!-- ─── Sidebar Nav ─── -->
+      <nav class="learn-nav" aria-label="Page sections">
+        <a href="#arbitrage">Arbitrage</a>
+        <a href="#ev">+EV Betting</a>
+        <a href="#vig">The Vig</a>
+        <a href="#devig">Power Devigging</a>
+        <a href="#kelly">Kelly Criterion</a>
+        <a href="#winprob">Win Probability</a>
+        <a href="#comparison">Arbs vs +EV</a>
+      </nav>
+
+      <!-- ─── Content ─── -->
+      <div class="learn-container">
+
+        <div class="learn-hero">
+          <h1>The Math Behind the Scanner</h1>
+          <p>Every concept explained from scratch — no prior betting knowledge required.</p>
+        </div>
+
+        <!-- ══════════════════════════════════════════════════════════════════ -->
+        <!-- SECTION 1: ARBITRAGE                                              -->
+        <!-- ══════════════════════════════════════════════════════════════════ -->
+        <section class="learn-section" id="arbitrage">
+          <h2>Section 1</h2>
+          <h3>What Is Arbitrage?</h3>
+
+          <p>Arbitrage happens when <strong>two platforms disagree on the odds</strong> for the same event. By betting both sides — one on each platform — you lock in a profit no matter who wins.</p>
+
+          <p>Think of it like finding the same sneaker priced at $80 on one site and selling for $100 on another. You buy low, sell high, and pocket the difference. In betting, the "price" is the odds.</p>
+
+          <div class="learn-example">
+            <div class="learn-example-label">Example — NBA Moneyline</div>
+
+            <div class="learn-comparison">
+              <div class="learn-comparison-side side-a">
+                <div class="side-label">Platform A</div>
+                <div class="side-value">+150</div>
+                <div class="side-detail">Bet $40.68 on Underdog</div>
+              </div>
+              <div class="learn-comparison-side side-b">
+                <div class="side-label">Platform B</div>
+                <div class="side-value">-140</div>
+                <div class="side-detail">Bet $59.32 on Favorite</div>
+              </div>
+            </div>
+
+            <div class="learn-outcome">
+              <span class="outcome-label">If underdog wins:</span>
+              <span class="outcome-value">$40.68 × 2.50 = $101.70 → +$1.70 profit</span>
+            </div>
+            <div class="learn-outcome">
+              <span class="outcome-label">If favorite wins:</span>
+              <span class="outcome-value">$59.32 × 1.71 = $101.69 → +$1.69 profit</span>
+            </div>
+          </div>
+
+          <div class="learn-callout callout-green">
+            <strong>Key point:</strong> With the right stake sizing, you profit no matter who wins. The scanner calculates the optimal split automatically.
+          </div>
+        </section>
+
+        <!-- ══════════════════════════════════════════════════════════════════ -->
+        <!-- SECTION 2: +EV                                                    -->
+        <!-- ══════════════════════════════════════════════════════════════════ -->
+        <section class="learn-section" id="ev">
+          <h2>Section 2</h2>
+          <h3>What Is +EV (Positive Expected Value)?</h3>
+
+          <p>Imagine a coin that lands heads <strong>60% of the time</strong>, but someone offers you even-money odds (bet $1 to win $1). You'd take that bet every time — not because you'll win <em>every</em> flip, but because over hundreds of flips, you'll come out ahead.</p>
+
+          <p>That's <strong>positive expected value (+EV)</strong>. The odds a sportsbook offers are better than the true probability suggests. You can lose any single bet, but over many bets, the math is in your favor.</p>
+
+          <div class="learn-example">
+            <div class="learn-example-label">Expected profit per $100 wagered</div>
+
+            <div class="learn-comparison">
+              <div class="learn-comparison-side side-a">
+                <div class="side-label">Sportsbook Odds</div>
+                <div class="side-value">+130</div>
+                <div class="side-detail">Implied: 43.5%</div>
+              </div>
+              <div class="learn-comparison-side side-b">
+                <div class="side-label">True Probability</div>
+                <div class="side-value">50.0%</div>
+                <div class="side-detail">From sharp line (devigged)</div>
+              </div>
+            </div>
+
+            <div class="learn-outcome">
+              <span class="outcome-label">Expected value per $100 bet:</span>
+              <span class="outcome-value">+$15.00 (15% edge)</span>
+            </div>
+          </div>
+
+          <div class="learn-callout callout-blue">
+            <strong>Arb vs +EV:</strong> Arbs guarantee profit on a single event. +EV bets are profitable over many bets, but you can (and will) lose individual ones. The edge compounds over time.
+          </div>
+        </section>
+
+        <!-- ══════════════════════════════════════════════════════════════════ -->
+        <!-- SECTION 3: VIG                                                    -->
+        <!-- ══════════════════════════════════════════════════════════════════ -->
+        <section class="learn-section" id="vig">
+          <h2>Section 3</h2>
+          <h3>What Is Vig? (The Bookmaker's Cut)</h3>
+
+          <p>If you add up the implied probabilities from a sportsbook's odds, they'll always sum to <strong>more than 100%</strong>. That extra amount is the <strong>vig</strong> (short for vigorish) — the bookmaker's built-in profit margin.</p>
+
+          <div class="learn-example">
+            <div class="learn-example-label">Example — A "fair" coin flip</div>
+
+            <p style="font-size: 0.78rem; color: var(--text-secondary); line-height: 1.7; margin-bottom: 14px;">
+              A truly fair coin is 50/50. If odds were fair, you'd pay <strong>50¢</strong> to win <strong>$1</strong> on each side.
+            </p>
+
+            <div class="learn-comparison">
+              <div class="learn-comparison-side side-a">
+                <div class="side-label">Fair Price</div>
+                <div class="side-value">50¢ / 50¢</div>
+                <div class="side-detail">Total: 100%</div>
+              </div>
+              <div class="learn-comparison-side side-b">
+                <div class="side-label">Sportsbook Price</div>
+                <div class="side-value">52¢ / 52¢</div>
+                <div class="side-detail">Total: 104%</div>
+              </div>
+            </div>
+
+            <div class="learn-outcome">
+              <span class="outcome-label">The extra 4¢ is the vig:</span>
+              <span class="outcome-value">The bookmaker's built-in profit margin</span>
+            </div>
+          </div>
+
+          <p>The vig means that even on a 50/50 event, you're paying slightly more than fair price. To find +EV bets, we need to <strong>remove the vig</strong> and uncover the true probabilities hidden underneath.</p>
+        </section>
+
+        <!-- ══════════════════════════════════════════════════════════════════ -->
+        <!-- SECTION 4: POWER DEVIGGING                                        -->
+        <!-- ══════════════════════════════════════════════════════════════════ -->
+        <section class="learn-section" id="devig">
+          <h2>Section 4</h2>
+          <h3>How We Remove the Vig (Power Devigging)</h3>
+
+          <p>The simplest way to remove vig is <strong>multiplicative devigging</strong> — just divide each implied probability by the total so they sum to 100%. But this assumes the bookmaker spreads vig <em>equally</em> across both sides. In reality, they don't.</p>
+
+          <p>Bookmakers add <strong>more vig to longshots</strong> than to favorites. A -500 favorite already has tight margins; there's room to inflate a +400 underdog's price. The <strong>Power method</strong> models this by finding a correction exponent that shrinks longshot probabilities more than favorite probabilities — matching how bookmakers actually set their lines.</p>
+
+          <div class="learn-example">
+            <div class="learn-example-label">Multiplicative vs Power — Real example</div>
+
+            <p style="font-size: 0.78rem; color: var(--text-secondary); line-height: 1.7; margin-bottom: 14px;">
+              Sportsbook odds: <strong>-300 / +250</strong> (implied: 75.0% + 28.6% = 103.6% total)
+            </p>
+
+            <table class="comparison-table">
+              <thead>
+                <tr>
+                  <th>Method</th>
+                  <th>Favorite</th>
+                  <th>Underdog</th>
+                  <th>Difference</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Raw implied</td>
+                  <td>75.0%</td>
+                  <td>28.6%</td>
+                  <td class="val-dim">103.6% total</td>
+                </tr>
+                <tr>
+                  <td>Multiplicative</td>
+                  <td>72.4%</td>
+                  <td>27.6%</td>
+                  <td class="val-dim">Equal vig removed</td>
+                </tr>
+                <tr>
+                  <td class="val-blue">Power</td>
+                  <td class="val-blue">73.1%</td>
+                  <td class="val-blue">26.9%</td>
+                  <td class="val-blue">More vig from longshot</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p>Notice the Power method assigns the underdog a <strong>lower true probability</strong> (26.9% vs 27.6%) — it attributes more of the vig to the longshot side, which is empirically more accurate.</p>
+
+          <details class="learn-collapsible">
+            <summary>Show the math</summary>
+            <div class="collapsible-body">
+              <p>Given implied probabilities <code>p_A</code> and <code>p_B</code> from the odds, we find an exponent <code>k</code> such that:</p>
+              <p><code>p_A^k + p_B^k = 1</code></p>
+              <p>This is solved numerically (binary search). The devigged probabilities are then:</p>
+              <p><code>true_A = p_A^k</code> and <code>true_B = p_B^k</code></p>
+              <p>When <code>k &lt; 1</code>, large probabilities (favorites) shrink less than small ones (longshots). This matches empirical data on how books set lines — the vig is disproportionately loaded onto longshots.</p>
+              <p>The multiplicative method is the special case where <code>k = 1</code> and you simply normalize: <code>true_A = p_A / (p_A + p_B)</code>.</p>
+            </div>
+          </details>
+
+          <div class="learn-callout callout-blue">
+            <strong>Why it matters:</strong> If you use multiplicative devigging, you'll overestimate longshot true probabilities and underestimate their edge — leading to worse bet selection.
+          </div>
+        </section>
+
+        <!-- ══════════════════════════════════════════════════════════════════ -->
+        <!-- SECTION 5: KELLY                                                  -->
+        <!-- ══════════════════════════════════════════════════════════════════ -->
+        <section class="learn-section" id="kelly">
+          <h2>Section 5</h2>
+          <h3>How We Rank +EV Bets (Kelly Criterion)</h3>
+
+          <p>Not all +EV bets are equal. A <strong>+26% EV longshot</strong> that wins 10% of the time sounds amazing, but in practice you'll face long, brutal losing streaks. A <strong>+5% EV favorite</strong> that wins 65% of the time will grow your bankroll more steadily.</p>
+
+          <p>The <strong>Kelly criterion</strong> answers: "Given my edge and win probability, what fraction of my bankroll should I bet?" It naturally balances edge size against variance — ranking bets by how much they actually grow your bankroll.</p>
+
+          <div class="learn-example">
+            <div class="learn-example-label">Kelly ranking — Longshot vs Favorite</div>
+
+            <div class="learn-comparison">
+              <div class="learn-comparison-side side-a">
+                <div class="side-label">Longshot</div>
+                <div class="side-value">+26% EV</div>
+                <div class="side-detail">Win prob: 10% · Kelly: 1.4%</div>
+              </div>
+              <div class="learn-comparison-side side-b">
+                <div class="side-label">Favorite</div>
+                <div class="side-value">+5% EV</div>
+                <div class="side-detail">Win prob: 65% · Kelly: 3.8%</div>
+              </div>
+            </div>
+
+            <div class="learn-outcome">
+              <span class="outcome-label">Kelly ranks the favorite higher:</span>
+              <span class="outcome-value">3.8% of bankroll vs 1.4%</span>
+            </div>
+          </div>
+
+          <p>Despite having a much smaller EV%, the favorite gets a higher Kelly allocation because you'll <strong>realize that edge more reliably</strong>. The longshot's huge EV% is discounted by its low win rate.</p>
+
+          <div class="learn-callout callout-yellow">
+            <strong>Half-Kelly:</strong> We use half-Kelly sizing (divide the Kelly fraction by 2). This gets roughly <strong>75% of the bankroll growth</strong> with <strong>half the variance</strong>. It's the standard recommendation because real-world probability estimates are never perfect.
+          </div>
+
+          <details class="learn-collapsible">
+            <summary>Show the math</summary>
+            <div class="collapsible-body">
+              <p>For a bet with decimal odds <code>d</code> and true win probability <code>p</code>:</p>
+              <p><code>b = d − 1</code> (the net payout per unit wagered)</p>
+              <p><code>q = 1 − p</code> (probability of losing)</p>
+              <p><code>f* = (b × p − q) / b</code></p>
+              <p>This gives the fraction of bankroll to wager. Half-Kelly: <code>f*/2</code>.</p>
+              <p>Example: odds of +200 (decimal 3.0), true prob 40%:</p>
+              <p><code>b = 2, p = 0.40, q = 0.60</code></p>
+              <p><code>f* = (2 × 0.40 − 0.60) / 2 = 0.20 / 2 = 10%</code></p>
+              <p>Half-Kelly = <strong>5%</strong> of bankroll.</p>
+            </div>
+          </details>
+        </section>
+
+        <!-- ══════════════════════════════════════════════════════════════════ -->
+        <!-- SECTION 6: WIN PROBABILITY                                        -->
+        <!-- ══════════════════════════════════════════════════════════════════ -->
+        <section class="learn-section" id="winprob">
+          <h2>Section 6</h2>
+          <h3>What the Win Probability Means</h3>
+
+          <p>Every +EV bet in the scanner shows a <strong>win probability</strong> derived from the devigged sharp line. The color coding tells you at a glance what kind of bet you're looking at:</p>
+
+          <div style="margin: 20px 0;">
+            <span class="prob-chip chip-green">● &gt;50%</span>
+            <span class="prob-chip chip-yellow">● 25–50%</span>
+            <span class="prob-chip chip-gray">● &lt;25%</span>
+          </div>
+
+          <p><strong><span style="color: var(--green);">Green</span></strong> means you'll win more often than not. These bets feel "normal" — you win most of them, and the edge compounds steadily.</p>
+
+          <p><strong><span style="color: var(--yellow);">Yellow</span></strong> means you're in coin-flip to underdog territory. You'll lose more than half the time, but the payoff when you win compensates.</p>
+
+          <p><strong><span style="color: var(--text-dim);">Gray</span></strong> means you're betting on a longshot. The edge might be real, but expect long losing streaks. A 15% win rate means roughly <strong>1 win per 7 bets</strong> — you need a large enough sample size for the edge to show.</p>
+
+          <div class="learn-callout callout-yellow">
+            <strong>Rule of thumb:</strong> If you're new to +EV betting, start with green and yellow win rates. Gray longshots have higher variance and require both a larger bankroll and more patience to realize the edge.
+          </div>
+        </section>
+
+        <!-- ══════════════════════════════════════════════════════════════════ -->
+        <!-- SECTION 7: ARBS vs +EV                                            -->
+        <!-- ══════════════════════════════════════════════════════════════════ -->
+        <section class="learn-section" id="comparison">
+          <h2>Section 7</h2>
+          <h3>Arbs vs +EV: When to Use Which</h3>
+
+          <table class="comparison-table">
+            <thead>
+              <tr>
+                <th></th>
+                <th>Arbs</th>
+                <th>+EV Bets</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Risk</td>
+                <td class="val-green">Guaranteed profit</td>
+                <td class="val-yellow">Profitable over time</td>
+              </tr>
+              <tr>
+                <td>Single bet</td>
+                <td class="val-green">Always win</td>
+                <td class="val-yellow">Can lose</td>
+              </tr>
+              <tr>
+                <td>Typical edge</td>
+                <td>1–4%</td>
+                <td>3–20%+</td>
+              </tr>
+              <tr>
+                <td>Frequency</td>
+                <td class="val-dim">Rare</td>
+                <td class="val-blue">Frequent</td>
+              </tr>
+              <tr>
+                <td>Capital needed</td>
+                <td>Both sides</td>
+                <td>One side only</td>
+              </tr>
+              <tr>
+                <td>Best for</td>
+                <td>Low-risk locking in profit</td>
+                <td>Long-term bankroll growth</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="learn-callout callout-green">
+            <strong>In the scanner, arbs always sort first</strong> because they're risk-free profit. +EV bets appear below, ranked by Kelly score — which factors in both edge size and win probability.
+          </div>
+
+          <p>Most experienced bettors use <strong>both strategies together</strong>: arbs for guaranteed returns when available, and +EV bets to keep volume up when arbs are scarce. The scanner surfaces both so you never miss an opportunity.</p>
+        </section>
+
+      </div><!-- /learn-container -->
+    </div><!-- /learn-body -->
+
+    <!-- ═══ FOOTER ═══ -->
+    <footer class="learn-footer">
+      <a href="./index.html" class="back-link-footer">← Back to Scanner</a>
+      <div class="footer-disclaimer">
+        For informational and educational purposes only. This tool does not constitute financial, gambling, or investment advice. Cross-platform arbitrage involves risks including but not limited to: differing resolution criteria, settlement delays, platform counterparty risk, liquidity constraints, and regulatory restrictions. Prediction markets may not be available in all jurisdictions. Always read the full contract/market rules on each platform before placing any trades.
+      </div>
+    </footer>
+
+  </div>
+</body>
+</html>
