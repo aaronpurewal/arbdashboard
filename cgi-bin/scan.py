@@ -1115,15 +1115,34 @@ def find_all_arb_opportunities(prediction_markets, sportsbook_entries, min_net_p
             if sb_same_as_yes:
                 # sb same side as pred YES → arb: pred NO + sb
                 arb = compute_arb_binary(no_price, sb_prob, pred_fee, SPORTSBOOK_FEE)
-                pred_side = outcomes[1] if len(outcomes) > 1 else "No"
+                pred_side_raw = "No"
                 pred_price = no_price
             else:
                 # sb opposite side from pred YES → arb: pred YES + sb
                 arb = compute_arb_binary(yes_price, sb_prob, pred_fee, SPORTSBOOK_FEE)
-                pred_side = outcomes[0] if outcomes else "Yes"
+                pred_side_raw = "Yes"
                 pred_price = yes_price
 
             sb_side = sb.get("outcome_name", "")
+
+            # Translate Yes/No into meaningful labels
+            pred_line = pred.get("_floor_strike")
+            no_sub = pred.get("_no_sub_title", "")
+            if pred_subtype == "totals" and pred_line is not None:
+                pred_side = f"Over {pred_line}" if pred_side_raw == "Yes" else f"Under {pred_line}"
+            elif pred_subtype == "h2h" and no_sub:
+                # no_sub_title has the YES team name (e.g., "Sacramento", "Phoenix")
+                yes_team = no_sub.strip()
+                if pred_side_raw == "Yes":
+                    pred_side = yes_team
+                else:
+                    # NO = the other team — find it from teams list
+                    pred_teams_list = pred.get("teams", [])
+                    other = [t for t in pred_teams_list
+                             if yes_team.lower() not in t]
+                    pred_side = other[0].title() if other else f"Not {yes_team}"
+            else:
+                pred_side = pred_side_raw
             sb_price_display = sb.get("american_odds", 0)
 
             if arb is None or arb["gross_arb_pct"] <= 0:
@@ -1191,10 +1210,23 @@ def find_all_arb_opportunities(prediction_markets, sportsbook_entries, min_net_p
                 resolution_risk = "low"
                 risk_note = "Different platforms may use different data sources for settlement"
 
+            # Build descriptive event string
+            base_event = sb.get("event_name", pred.get("question", "")[:60])
+            if pred_subtype == "totals" and pred_line is not None:
+                event_display = f"{base_event} — O/U {pred_line}"
+            elif pred_subtype == "h2h":
+                event_display = f"{base_event} — ML"
+            elif pred_subtype == "spreads":
+                event_display = f"{base_event} — Spread"
+            elif pred_subtype == "player_props":
+                event_display = f"{base_event} — Props"
+            else:
+                event_display = base_event
+
             opp = {
                 "id": hashlib.md5(f"{pred.get('id','')}-{sb.get('bookmaker','')}-{sb.get('outcome_name','')}-{pred_side}".encode()).hexdigest()[:12],
                 "sport": sport_display,
-                "event": sb.get("event_name", pred.get("question", "")[:60]),
+                "event": event_display,
                 "event_detail": pred.get("question", ""),
                 "commence_time": commence,
                 "time_display": time_display,
