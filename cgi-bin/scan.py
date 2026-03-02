@@ -326,7 +326,9 @@ _nhl_teams = {"boston bruins", "toronto maple leafs", "edmonton oilers", "colora
     "calgary flames", "nashville predators", "washington capitals", "ottawa senators",
     "buffalo sabres", "new york islanders", "philadelphia flyers", "utah hockey club",
     "seattle kraken", "columbus blue jackets", "anaheim ducks", "san jose sharks",
-    "new jersey devils"}
+    "new jersey devils", "winnipeg jets", "vegas golden knights",
+    "florida panthers", "new york rangers", "montreal canadiens",
+    "los angeles kings", "st louis blues"}
 for t in _nba_teams: TEAM_TO_SPORT[t] = "nba"
 for t in _nfl_teams: TEAM_TO_SPORT[t] = "nfl"
 for t in _mlb_teams: TEAM_TO_SPORT[t] = "mlb"
@@ -1491,6 +1493,35 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
 # Sportsbooks considered "sharp" (lowest vig, sharpest lines) — used preferentially
 SHARP_BOOKS = {"pinnacle", "lowvig", "novig"}
 
+
+def _power_devig(probs):
+    """
+    Power method devigging — industry standard correction for favorite-longshot bias.
+    Finds exponent k such that sum(p_i^k) = 1, then fair_prob_i = p_i^k.
+    Uses bisection (no scipy needed). Falls back to multiplicative if any prob <= 0.
+    """
+    if len(probs) < 2:
+        return list(probs)
+    if any(p <= 0 for p in probs):
+        # Fallback: multiplicative
+        total = sum(probs)
+        return [p / total for p in probs] if total > 0 else list(probs)
+
+    lo, hi = 0.5, 20.0
+    for _ in range(80):
+        mid = (lo + hi) / 2.0
+        s = sum(p ** mid for p in probs)
+        if s > 1.0:
+            lo = mid
+        else:
+            hi = mid
+        if abs(s - 1.0) < 1e-12:
+            break
+
+    k = (lo + hi) / 2.0
+    return [p ** k for p in probs]
+
+
 def build_fair_odds_index(sportsbook_entries):
     """
     Build a fair-odds index from sportsbook data.
@@ -1535,20 +1566,23 @@ def build_fair_odds_index(sportsbook_entries):
                 sharp_total += sharp_probs[okey]
 
         if sharp_probs and sharp_total > 0:
-            # Devig sharp lines
-            for okey, raw_prob in sharp_probs.items():
-                fair_probs[okey] = raw_prob / sharp_total
+            # Devig sharp lines using Power method
+            okeys = list(sharp_probs.keys())
+            raw = [sharp_probs[k] for k in okeys]
+            devigged = _power_devig(raw)
+            for k, fp in zip(okeys, devigged):
+                fair_probs[k] = fp
         else:
-            # Fallback: consensus across all books (median implied prob)
-            consensus_total = 0
+            # Fallback: consensus across all books (median implied prob), then Power devig
             for okey, entries in outcomes.items():
                 probs = sorted([p for _, p in entries])
                 median = probs[len(probs) // 2]  # simple median
                 fair_probs[okey] = median
-                consensus_total += median
-            if consensus_total > 0:
-                for okey in fair_probs:
-                    fair_probs[okey] /= consensus_total
+            okeys = list(fair_probs.keys())
+            raw = [fair_probs[k] for k in okeys]
+            devigged = _power_devig(raw)
+            for k, fp in zip(okeys, devigged):
+                fair_probs[k] = fp
 
         fair_index[(event_key, mtype)] = fair_probs
 
@@ -1732,6 +1766,11 @@ def find_ev_opportunities(prediction_markets, sportsbook_entries, fair_index, mi
         if ev > 30:
             continue  # almost certainly stale data
 
+        # Compute half-Kelly fraction for sorting/sizing
+        gross_payout = 1.0 / pred_price if pred_price > 0 else 0
+        b = (gross_payout - 1.0) * (1.0 - pred_fee) if gross_payout > 1 else 0
+        kelly_f = max(0, (b * fair_prob - (1.0 - fair_prob)) / b) / 2.0 if b > 0 else 0
+
         # Build side labels
         pred_line = pred.get("_floor_strike")
         no_sub = pred.get("_no_sub_title", "")
@@ -1826,6 +1865,7 @@ def find_ev_opportunities(prediction_markets, sportsbook_entries, fair_index, mi
             "gross_arb_pct": 0,
             "net_arb_pct": round(ev, 3),
             "ev_pct": round(ev, 3),
+            "kelly_fraction": round(kelly_f, 6),
             "consensus_prob": round(fair_prob, 4),
             "match_confidence": round(confidence, 2),
             "resolution_risk": "medium",
@@ -1996,6 +2036,11 @@ def find_cross_sportsbook_opportunities(sportsbook_entries, fair_index, min_ev_p
                         if ev is None or ev < min_ev_pct or ev > 30:
                             continue
 
+                        # Compute half-Kelly fraction
+                        xsb_payout = 1.0 / prob if prob > 0 else 0
+                        xsb_b = (xsb_payout - 1.0) if xsb_payout > 1 else 0
+                        xsb_kelly = max(0, (xsb_b * fair_p - (1.0 - fair_p)) / xsb_b) / 2.0 if xsb_b > 0 else 0
+
                         commence = best.get("commence_time", "")
                         is_live = False
                         time_display = ""
@@ -2068,6 +2113,7 @@ def find_cross_sportsbook_opportunities(sportsbook_entries, fair_index, min_ev_p
                             "gross_arb_pct": 0,
                             "net_arb_pct": round(ev, 3),
                             "ev_pct": round(ev, 3),
+                            "kelly_fraction": round(xsb_kelly, 6),
                             "consensus_prob": round(fair_p, 4),
                             "match_confidence": 1.0,
                             "resolution_risk": "medium",

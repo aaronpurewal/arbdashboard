@@ -333,14 +333,25 @@ function applyFilters() {
     return true;
   });
 
-  // Sort
+  // Sort — arbs always rank above +EV, then within each group by selected metric
   const sortBy = document.getElementById("sortSelect").value;
   opps.sort((a, b) => {
+    // Arbs first (type "arb" before "ev")
+    if (a.type !== b.type) {
+      if (a.type === "arb") return -1;
+      if (b.type === "arb") return 1;
+    }
+
     let va, vb;
     switch (sortBy) {
       case "edge":
-        va = a.type === "ev" ? (a.ev_pct || 0) : a.net_arb_pct;
-        vb = b.type === "ev" ? (b.ev_pct || 0) : b.net_arb_pct;
+        // Arbs by net%, +EV by Kelly fraction (bankroll-optimal ranking)
+        va = a.type === "ev" ? (a.kelly_fraction || 0) : (a.net_arb_pct || 0);
+        vb = b.type === "ev" ? (b.kelly_fraction || 0) : (b.net_arb_pct || 0);
+        break;
+      case "ev_raw":
+        va = a.type === "ev" ? (a.ev_pct || 0) : (a.net_arb_pct || 0);
+        vb = b.type === "ev" ? (b.ev_pct || 0) : (b.net_arb_pct || 0);
         break;
       case "gross_pct": va = a.gross_arb_pct; vb = b.gross_arb_pct; break;
       case "time":
@@ -350,8 +361,8 @@ function applyFilters() {
       case "liquidity": va = a.liquidity || 0; vb = b.liquidity || 0; break;
       case "confidence": va = a.match_confidence || 0; vb = b.match_confidence || 0; break;
       default:
-        va = a.type === "ev" ? (a.ev_pct || 0) : a.net_arb_pct;
-        vb = b.type === "ev" ? (b.ev_pct || 0) : b.net_arb_pct;
+        va = a.type === "ev" ? (a.kelly_fraction || 0) : (a.net_arb_pct || 0);
+        vb = b.type === "ev" ? (b.kelly_fraction || 0) : (b.net_arb_pct || 0);
     }
     return vb - va; // Descending default
   });
@@ -380,8 +391,8 @@ function sortByColumn(opps, col, dir) {
       case "platform_b": va = a.platform_b.name; vb = b.platform_b.name; break;
       case "gross": va = a.gross_arb_pct; vb = b.gross_arb_pct; break;
       case "net":
-        va = (a.type === "ev") ? (a.ev_pct || 0) : a.net_arb_pct;
-        vb = (b.type === "ev") ? (b.ev_pct || 0) : b.net_arb_pct;
+        va = (a.type === "ev") ? (a.kelly_fraction || 0) : (a.net_arb_pct || 0);
+        vb = (b.type === "ev") ? (b.kelly_fraction || 0) : (b.net_arb_pct || 0);
         break;
       default: return 0;
     }
@@ -435,7 +446,12 @@ function renderTable() {
       ? `${formatProb(opp.platform_b.implied_prob)}<br><span style="color:var(--text-dim);font-size:0.6rem">${formatOdds(opp.platform_b.american_odds)}</span>`
       : formatOdds(opp.platform_b.american_odds);
 
-    const edgeLabel = isEV ? `+${formatPct(edgePct)} EV` : formatPct(edgePct);
+    let edgeLabel = isEV ? `+${formatPct(edgePct)} EV` : formatPct(edgePct);
+    if (isEV && opp.consensus_prob) {
+      const winPct = Math.round(opp.consensus_prob * 100);
+      const winClass = winPct > 50 ? "high" : winPct >= 25 ? "mid" : "low";
+      edgeLabel += `<span class="win-rate ${winClass}">Win ~${winPct}%</span>`;
+    }
     const edgeClass = isEV ? "profit-cell" : `profit-cell ${profitClass(edgePct)}`;
     const edgeColor = isEV ? 'style="color:var(--blue);text-shadow:0 0 12px rgba(77,166,255,0.2)"' : "";
 
@@ -589,6 +605,7 @@ function renderEVDetail(opp) {
       <div class="explainer-text">
         The price on <strong>${escapeHtml(opp.platform_a.name)}</strong> is cheaper than the true fair probability.
         You're paying <strong>${formatProb(opp.platform_a.implied_prob)}</strong> for something worth <strong style="color:var(--blue)">${formatProb(opp.consensus_prob)}</strong>.
+        You win this bet approximately <strong>${Math.round((opp.consensus_prob || 0) * 100)}%</strong> of the time.
         This is <strong>not a guaranteed profit</strong> — you can lose any single bet — but repeating +EV bets is profitable long-term.
       </div>
     </div>

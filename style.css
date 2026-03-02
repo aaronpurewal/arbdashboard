@@ -1017,6 +1017,18 @@ tr.tier-ev:hover td {
 .profit-cell.marginal { color: var(--yellow); }
 .profit-cell.negative { color: var(--red); opacity: 0.7; }
 
+/* ── Win Rate Indicator ─────────────────────────────────────────────────── */
+.win-rate {
+  display: block;
+  font-size: 0.58rem;
+  font-weight: 600;
+  margin-top: 2px;
+  letter-spacing: 0.3px;
+}
+.win-rate.high { color: var(--green-dim); }
+.win-rate.mid  { color: var(--yellow-dim); }
+.win-rate.low  { color: var(--text-dim); }
+
 /* ── Risk Icons ──────────────────────────────────────────────────────────── */
 .risk-icon { cursor: help; font-size: 0.85rem; }
 .risk-low    { color: var(--green-dim); }
