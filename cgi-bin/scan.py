@@ -623,6 +623,41 @@ KALSHI_SPORTS_SERIES = {
     ],
 }
 
+# Series ticker → URL slug (from Kalshi series titles)
+KALSHI_SERIES_SLUG = {
+    "KXNBAGAME": "professional-basketball-game",
+    "KXNBASPREAD": "pro-basketball-spread",
+    "KXNBATOTAL": "pro-basketball-total-points",
+    "KXNBAPTS": "pro-basketball-player-points",
+    "KXNBA1HTOTAL": "nba-1st-half-total-points",
+    "KXNFLGAME": "professional-football-game",
+    "KXNFLSPREAD": "pro-football-spread",
+    "KXNFLTOTAL": "pro-football-total-points",
+    "KXMLBGAME": "professional-baseball-game",
+    "KXMLBSPREAD": "pro-baseball-spread",
+    "KXNHLGAME": "nhl-game",
+    "KXNHLSPREAD": "nhl-spread",
+    "KXUFCFIGHT": "ufc-fight",
+    "KXMMAGAME": "mma-fight",
+    "KXEPLGAME": "english-premier-league-game",
+    "KXEPLTOTAL": "english-premier-league-total-goals",
+    "KXMLSGAME": "major-league-soccer-game",
+}
+
+
+def _kalshi_build_url(ticker, series_ticker):
+    """Build correct Kalshi market URL: /markets/{series}/{slug}/{ticker}"""
+    if not ticker:
+        return ""
+    slug = KALSHI_SERIES_SLUG.get(series_ticker, "")
+    t = ticker.lower()
+    s = series_ticker.lower() if series_ticker else ""
+    if slug and s:
+        return f"https://kalshi.com/markets/{s}/{slug}/{t}"
+    elif s:
+        return f"https://kalshi.com/markets/{s}/{t}"
+    return f"https://kalshi.com/markets/{t}"
+
 
 def _kalshi_parse_price(m):
     """Parse Kalshi market prices (in cents 0-100) to probabilities (0-1)."""
@@ -706,7 +741,7 @@ def fetch_kalshi_sports(db=None):
                 "_market_subtype": SERIES_MARKET_SUBTYPE.get(series_ticker, "unknown"),
                 "_floor_strike": float(floor_strike) if floor_strike is not None else None,
                 "_no_sub_title": no_sub,
-                "url": f"https://kalshi.com/markets/{m.get('ticker', '').lower()}" if m.get('ticker') else "",
+                "url": _kalshi_build_url(m.get("ticker", ""), series_ticker),
             }
             results.append(entry)
         except Exception:
