@@ -2041,6 +2041,16 @@ def find_ev_opportunities(prediction_markets, sportsbook_entries, fair_index, mi
         if ev > 30:
             continue  # almost certainly stale data
 
+        # Determine live status early (needed for adaptive Kelly)
+        commence = sb.get("commence_time", "")
+        is_live = False
+        if commence:
+            try:
+                event_time = datetime.fromisoformat(commence.replace("Z", "+00:00"))
+                is_live = event_time < datetime.now(timezone.utc)
+            except Exception:
+                pass
+
         # Compute Kelly fractions
         gross_payout = 1.0 / pred_price if pred_price > 0 else 0
         b = (gross_payout - 1.0) * (1.0 - pred_fee) if gross_payout > 1 else 0
@@ -2093,9 +2103,7 @@ def find_ev_opportunities(prediction_markets, sportsbook_entries, fair_index, mi
         elif "mma" in sport.lower(): sport_display = "MMA"
         else: sport_display = sport[:10] if sport else "Sports"
 
-        # Time
-        commence = sb.get("commence_time", "")
-        is_live = False
+        # Time display (is_live and commence already set above)
         time_display = ""
         if commence:
             try:
