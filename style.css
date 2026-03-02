@@ -281,6 +281,56 @@ body::after {
   font-weight: 700;
 }
 
+/* ── Auto-Scan Toggle ─────────────────────────────────────────────────────── */
+.auto-scan-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.auto-scan-toggle input { display: none; }
+.auto-scan-slider {
+  width: 36px;
+  height: 20px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-glass);
+  border-radius: 100px;
+  position: relative;
+  transition: background 0.25s, border-color 0.25s;
+}
+.auto-scan-slider::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  background: var(--text-dim);
+  border-radius: 50%;
+  transition: transform 0.25s, background 0.25s;
+}
+.auto-scan-toggle input:checked + .auto-scan-slider {
+  background: rgba(0, 255, 136, 0.15);
+  border-color: var(--green);
+}
+.auto-scan-toggle input:checked + .auto-scan-slider::after {
+  transform: translateX(16px);
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+}
+.auto-scan-label {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  transition: color 0.25s;
+}
+.auto-scan-toggle input:checked ~ .auto-scan-label {
+  color: var(--green);
+}
+
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 .btn {
   font-family: var(--font-mono);
@@ -1471,6 +1521,7 @@ tr.new-row-enter:nth-child(25) { animation-delay: 0.48s; }
   .logo { font-size: 1rem; letter-spacing: 3px; }
   .logo-sub { display: none; }
   .scan-timer { display: none; }
+  .auto-scan-toggle .auto-scan-label { display: none; }
   .dashboard { padding: 12px; gap: 12px; }
   .stats-bar { grid-template-columns: repeat(2, 1fr); gap: 10px; }
   .stat-card { padding: 16px 18px; }

@@ -23,6 +23,7 @@ const state = {
   countdownSeconds: 60,
   countdownInterval: null,
   scanInterval: null,
+  autoScanEnabled: true,
   sortColumn: "net",
   sortDirection: "desc",
   previousIds: new Set(),
@@ -726,6 +727,10 @@ function startAutoRefresh() {
   if (state.scanInterval) clearInterval(state.scanInterval);
 
   state.countdownInterval = setInterval(() => {
+    if (!state.autoScanEnabled) {
+      document.getElementById("countdown").textContent = "paused";
+      return;
+    }
     const mode = getScanMode();
     if (mode === "off") {
       document.getElementById("countdown").textContent = "off-hours";
@@ -821,6 +826,21 @@ async function handleSaveSettings() {
 function setupEventListeners() {
   // Refresh button
   document.getElementById("btnRefresh").addEventListener("click", runScan);
+
+  // Auto-scan toggle
+  const autoToggle = document.getElementById("toggleAutoScan");
+  if (autoToggle) {
+    autoToggle.addEventListener("change", () => {
+      state.autoScanEnabled = autoToggle.checked;
+      if (autoToggle.checked) {
+        resetCountdown();
+        startAutoRefresh();
+      } else {
+        if (state.countdownInterval) clearInterval(state.countdownInterval);
+        document.getElementById("countdown").textContent = "paused";
+      }
+    });
+  }
 
   // Settings
   document.getElementById("btnSettings").addEventListener("click", openSettings);
