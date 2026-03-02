@@ -1025,6 +1025,10 @@ def find_all_arb_opportunities(prediction_markets, sportsbook_entries, min_net_p
         if yes_price <= 0 or yes_price >= 1:
             continue
 
+        # Skip illiquid markets — wide bid-ask spreads create phantom arbs
+        if yes_price + no_price < 0.90:
+            continue
+
         pred_fee = POLYMARKET_FEE if source == "polymarket" else KALSHI_FEE
 
         # Narrow candidates by team index — skip markets with no teams
@@ -1261,6 +1265,8 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
 
         if len(pm_prices) < 2:
             continue
+        if pm_prices[0] + pm_prices[1] < 0.90:
+            continue  # illiquid — wide bid-ask creates phantom arbs
 
         # Narrow Kalshi candidates by team overlap
         if pm_teams:
@@ -1278,6 +1284,8 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
 
             if len(km_prices) < 2:
                 continue
+            if km_prices[0] + km_prices[1] < 0.90:
+                continue  # illiquid — wide bid-ask creates phantom arbs
 
             # Match by teams and text
             team_overlap = len(set(pm_teams) & set(km_teams))
