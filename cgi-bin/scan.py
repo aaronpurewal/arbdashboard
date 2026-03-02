@@ -1000,7 +1000,9 @@ def find_all_arb_opportunities(prediction_markets, sportsbook_entries, min_net_p
     opportunities = []
 
     # Fees
-    KALSHI_FEE = 0.012  # ~1.2% effective
+    # Kalshi: dynamic fee = 0.07 * price * (1-price) per contract
+    #   → as fraction of winnings: 0.07 * price
+    KALSHI_FEE_COEFF = 0.07  # fee_on_winnings = 0.07 * contract_price
     POLYMARKET_FEE = 0.02  # 2% taker fee on winnings
     SPORTSBOOK_FEE = 0.0  # Built into odds
 
@@ -1029,7 +1031,7 @@ def find_all_arb_opportunities(prediction_markets, sportsbook_entries, min_net_p
         if yes_price + no_price < 0.90:
             continue
 
-        pred_fee = POLYMARKET_FEE if source == "polymarket" else KALSHI_FEE
+        is_kalshi = source != "polymarket"
 
         # Narrow candidates by team index — skip markets with no teams
         pred_teams = pred.get("teams", [])
@@ -1133,14 +1135,16 @@ def find_all_arb_opportunities(prediction_markets, sportsbook_entries, min_net_p
 
             if sb_same_as_yes:
                 # sb same side as pred YES → arb: pred NO + sb
-                arb = compute_arb_binary(no_price, sb_prob, pred_fee, SPORTSBOOK_FEE)
-                pred_side_raw = "No"
                 pred_price = no_price
+                pred_fee = (KALSHI_FEE_COEFF * pred_price) if is_kalshi else POLYMARKET_FEE
+                arb = compute_arb_binary(pred_price, sb_prob, pred_fee, SPORTSBOOK_FEE)
+                pred_side_raw = "No"
             else:
                 # sb opposite side from pred YES → arb: pred YES + sb
-                arb = compute_arb_binary(yes_price, sb_prob, pred_fee, SPORTSBOOK_FEE)
-                pred_side_raw = "Yes"
                 pred_price = yes_price
+                pred_fee = (KALSHI_FEE_COEFF * pred_price) if is_kalshi else POLYMARKET_FEE
+                arb = compute_arb_binary(pred_price, sb_prob, pred_fee, SPORTSBOOK_FEE)
+                pred_side_raw = "Yes"
 
             # Build descriptive sportsbook side label
             sb_outcome = sb.get("outcome_name", "")
@@ -1308,7 +1312,7 @@ def find_all_arb_opportunities(prediction_markets, sportsbook_entries, min_net_p
 def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
     """Find arbs between Polymarket and Kalshi on the same event."""
     opportunities = []
-    KALSHI_FEE = 0.012
+    KALSHI_FEE_COEFF = 0.07  # fee_on_winnings = 0.07 * contract_price
     POLYMARKET_FEE = 0.02
 
     # Build team index for Kalshi markets
@@ -1409,18 +1413,20 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
 
             if aligned:
                 # Aligned: PM YES ≈ KM YES → arb: PM YES + KM NO
-                arb = compute_arb_binary(pm_yes, km_no, POLYMARKET_FEE, KALSHI_FEE)
-                pa_side = pm.get("outcomes", ["Yes"])[0]
                 pa_price = pm_yes
-                pb_side = km.get("outcomes", ["", "No"])[1]
                 pb_price = km_no
+                kalshi_fee = KALSHI_FEE_COEFF * pb_price
+                arb = compute_arb_binary(pa_price, pb_price, POLYMARKET_FEE, kalshi_fee)
+                pa_side = pm.get("outcomes", ["Yes"])[0]
+                pb_side = km.get("outcomes", ["", "No"])[1]
             else:
                 # Misaligned: PM YES ≈ KM NO → arb: PM YES + KM YES
-                arb = compute_arb_binary(pm_yes, km_yes, POLYMARKET_FEE, KALSHI_FEE)
-                pa_side = pm.get("outcomes", ["Yes"])[0]
                 pa_price = pm_yes
-                pb_side = km.get("outcomes", ["Yes"])[0]
                 pb_price = km_yes
+                kalshi_fee = KALSHI_FEE_COEFF * pb_price
+                arb = compute_arb_binary(pa_price, pb_price, POLYMARKET_FEE, kalshi_fee)
+                pa_side = pm.get("outcomes", ["Yes"])[0]
+                pb_side = km.get("outcomes", ["Yes"])[0]
 
             if arb is None or arb["gross_arb_pct"] <= 0:
                 continue
@@ -1455,7 +1461,7 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
                     "price": round(pb_price, 4),
                     "implied_prob": round(pb_price, 4),
                     "american_odds": implied_prob_to_american(pb_price),
-                    "fee_pct": KALSHI_FEE * 100,
+                    "fee_pct": round(kalshi_fee * 100, 2),
                     "url": km.get("url", ""),
                     "market_id": km.get("id", ""),
                 },
