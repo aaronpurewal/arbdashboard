@@ -660,18 +660,23 @@ def _kalshi_build_url(ticker, series_ticker):
 
 
 def _kalshi_parse_price(m):
-    """Parse Kalshi market prices (in cents 0-100) to probabilities (0-1)."""
-    yes_price = m.get("yes_bid", 0) or m.get("last_price", 0) or 0
-    no_price = m.get("no_bid", 0) or 0
-    if yes_price == 0 and no_price == 0:
-        yes_price = m.get("yes_ask", 0) or 0
-        no_price = m.get("no_ask", 0) or 0
+    """
+    Parse Kalshi market prices (in cents 0-100) to probabilities (0-1).
+    Uses last_price (what Kalshi UI shows) as primary, yes_ask (cost to buy)
+    as fallback. Avoids yes_bid which can be far below the actual market price
+    due to wide bid/ask spreads.
+    """
+    # Primary: last traded price (matches what Kalshi UI displays)
+    yes_price = m.get("last_price", 0) or 0
+
+    # Fallback: yes_ask (the actual cost to buy YES right now)
+    if yes_price == 0:
+        yes_price = m.get("yes_ask", 0) or m.get("yes_bid", 0) or 0
+
     yes_prob = yes_price / 100.0 if yes_price > 1 else float(yes_price)
-    no_prob = no_price / 100.0 if no_price > 1 else float(no_price)
-    if yes_prob == 0 and no_prob > 0:
-        yes_prob = 1.0 - no_prob
-    elif no_prob == 0 and yes_prob > 0:
-        no_prob = 1.0 - yes_prob
+
+    # NO price is complement (binary market: YES + NO = 100 cents)
+    no_prob = 1.0 - yes_prob if yes_prob > 0 else 0
     return yes_prob, no_prob
 
 
