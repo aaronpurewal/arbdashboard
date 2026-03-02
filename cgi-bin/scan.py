@@ -283,6 +283,21 @@ def similarity_score_from_tokens(tokens_a, tokens_b):
     union = tokens_a | tokens_b
     return len(intersection) / len(union)
 
+def _parse_event_date(dt_str):
+    """Extract date from an ISO datetime string. Returns datetime.date or None."""
+    if not dt_str:
+        return None
+    try:
+        return datetime.fromisoformat(dt_str.replace("Z", "+00:00")).date()
+    except (ValueError, TypeError):
+        return None
+
+def _dates_compatible(date_a, date_b, max_days=2):
+    """Check if two dates are within max_days of each other."""
+    if date_a is None or date_b is None:
+        return True  # can't determine — don't filter
+    return abs((date_a - date_b).days) <= max_days
+
 # ─── Sport category helpers ──────────────────────────────────────────────────
 
 SPORT_KEY_TO_CATEGORY = {
@@ -653,18 +668,21 @@ KALSHI_SERIES_SLUG = {
 }
 
 
-def _kalshi_build_url(ticker, series_ticker):
-    """Build correct Kalshi market URL: /markets/{series}/{slug}/{ticker}"""
-    if not ticker:
+def _kalshi_build_url(ticker, series_ticker, event_ticker=""):
+    """Build correct Kalshi market URL: /markets/{series}/{slug}/{event_ticker}
+    Uses event_ticker (the event page showing all outcomes) rather than
+    individual market ticker (which has outcome suffixes like -WOL, -TIE)."""
+    # Prefer event_ticker — it's the page Kalshi shows for the event
+    page_id = (event_ticker or ticker or "").lower()
+    if not page_id:
         return ""
     slug = KALSHI_SERIES_SLUG.get(series_ticker, "")
-    t = ticker.lower()
     s = series_ticker.lower() if series_ticker else ""
     if slug and s:
-        return f"https://kalshi.com/markets/{s}/{slug}/{t}"
+        return f"https://kalshi.com/markets/{s}/{slug}/{page_id}"
     elif s:
-        return f"https://kalshi.com/markets/{s}/{t}"
-    return f"https://kalshi.com/markets/{t}"
+        return f"https://kalshi.com/markets/{s}/{page_id}"
+    return f"https://kalshi.com/markets/{page_id}"
 
 
 def _kalshi_parse_price(m):
@@ -754,7 +772,7 @@ def fetch_kalshi_sports(db=None):
                 "_market_subtype": SERIES_MARKET_SUBTYPE.get(series_ticker, "unknown"),
                 "_floor_strike": float(floor_strike) if floor_strike is not None else None,
                 "_no_sub_title": no_sub,
-                "url": _kalshi_build_url(m.get("ticker", ""), series_ticker),
+                "url": _kalshi_build_url(m.get("ticker", ""), series_ticker, m.get("event_ticker", "")),
             }
             results.append(entry)
         except Exception:
@@ -908,12 +926,18 @@ def try_match_prediction_to_sportsbook(pred_market, sportsbook_entries):
     pred_teams = pred_market.get("teams", [])
     full_text = question + " " + description
     pred_tokens = pred_market.get("_tokens", None)
+    pred_date = _parse_event_date(pred_market.get("end_date", ""))
 
     matches = []
 
     for sb in sportsbook_entries:
         score = 0
         sb_teams = sb.get("teams", [])
+
+        # Date check — same teams can play on different dates
+        sb_date = _parse_event_date(sb.get("commence_time", ""))
+        if not _dates_compatible(pred_date, sb_date, max_days=2):
+            continue  # wrong date — skip
 
         # Team matching — count how many prediction teams appear in sportsbook teams
         team_matches = 0
@@ -1398,6 +1422,8 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
         else:
             candidates = kalshi_markets
 
+        pm_date = _parse_event_date(pm.get("end_date", ""))
+
         for km in candidates:
             km_question = km.get("question", "").lower()
             km_teams = km.get("teams", [])
@@ -1407,6 +1433,11 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
                 continue
             if km_prices[0] + km_prices[1] < 0.90:
                 continue  # illiquid — wide bid-ask creates phantom arbs
+
+            # Date check — same teams can play on different dates
+            km_date = _parse_event_date(km.get("end_date", ""))
+            if not _dates_compatible(pm_date, km_date, max_days=2):
+                continue  # wrong date — skip
 
             # Match by teams and text
             team_overlap = len(set(pm_teams) & set(km_teams))
