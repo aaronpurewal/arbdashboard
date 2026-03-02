@@ -689,7 +689,7 @@ async function runScan() {
 // ─── Countdown & Auto-Refresh ─────────────────────────────────────────────────
 
 function resetCountdown() {
-  state.countdownSeconds = state.config.refresh_interval || 60;
+  state.countdownSeconds = getRefreshInterval() || (state.config.refresh_interval || 60);
   updateCountdownDisplay();
 }
 
@@ -703,14 +703,22 @@ function updateCountdownDisplay() {
   }
 }
 
-function isAutoScanWindow() {
-  // Auto-scan only between 2 PM ET (14:00) and 12 AM ET (00:00)
+function getScanMode() {
+  // Returns "prime" | "extended" | "off" based on US Eastern time
   const now = new Date();
-  // Get current hour in US Eastern time
   const etHour = parseInt(
     now.toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: false })
   );
-  return etHour >= 14; // 14:00–23:59 ET
+  if (etHour >= 19) return "prime";     // 7 PM – 11:59 PM ET: 30s refresh
+  if (etHour >= 12) return "extended";   // 12 PM – 6:59 PM ET: configured interval
+  return "off";                          // 12 AM – 11:59 AM ET: manual only
+}
+
+function getRefreshInterval() {
+  const mode = getScanMode();
+  if (mode === "prime") return 30;                          // 30s during prime time
+  if (mode === "extended") return state.config.refresh_interval || 60;  // user setting
+  return 0;                                                 // no auto-refresh
 }
 
 function startAutoRefresh() {
@@ -718,10 +726,15 @@ function startAutoRefresh() {
   if (state.scanInterval) clearInterval(state.scanInterval);
 
   state.countdownInterval = setInterval(() => {
-    if (!isAutoScanWindow()) {
+    const mode = getScanMode();
+    if (mode === "off") {
       document.getElementById("countdown").textContent = "off-hours";
       return;
     }
+    // Sync interval to current mode (prime=30s, extended=configured)
+    const target = getRefreshInterval();
+    if (state.countdownSeconds > target) state.countdownSeconds = target;
+
     state.countdownSeconds--;
     if (state.countdownSeconds <= 0) {
       runScan();
