@@ -735,7 +735,8 @@ def fetch_sportsbook_odds(db=None, api_key=""):
         "mma_mixed_martial_arts",
     ]
 
-    bookmakers = "draftkings,fanduel,betrivers,betmgm,pinnacle,williamhill_us,bovada"
+    # No bookmakers filter — the API returns ALL available bookmakers at no
+    # extra credit cost.  More books = better consensus for the +EV engine.
     all_events = []
 
     api_errors = []
@@ -748,7 +749,7 @@ def fetch_sportsbook_odds(db=None, api_key=""):
             markets_param = "h2h,spreads,totals"
         url = (f"https://api.the-odds-api.com/v4/sports/{sport}/odds?"
                f"apiKey={api_key}&regions=us&markets={markets_param}"
-               f"&bookmakers={bookmakers}&oddsFormat=american")
+               f"&oddsFormat=american")
         data = fetch_json(url)
         if isinstance(data, dict) and "_error" in data:
             err = data["_error"]
@@ -1258,6 +1259,7 @@ def find_all_arb_opportunities(prediction_markets, sportsbook_entries, min_net_p
 
             opp = {
                 "id": hashlib.md5(f"{pred.get('id','')}-{sb.get('bookmaker','')}-{sb.get('outcome_name','')}-{pred_side}".encode()).hexdigest()[:12],
+                "type": "arb",
                 "sport": sport_display,
                 "event": event_display,
                 "event_detail": pred.get("question", ""),
@@ -1439,6 +1441,7 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
 
             opp = {
                 "id": hashlib.md5(f"cross-{pm.get('id','')}-{km.get('id','')}-{pa_side}".encode()).hexdigest()[:12],
+                "type": "arb",
                 "sport": "Sports",
                 "event": pm.get("question", "")[:60],
                 "event_detail": pm.get("question", ""),
@@ -1481,6 +1484,608 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
             opportunities.append(opp)
 
     return sorted(opportunities, key=lambda x: x['net_arb_pct'], reverse=True)
+
+
+# ─── Devigging & +EV engine ──────────────────────────────────────────────────
+
+# Sportsbooks considered "sharp" (lowest vig, sharpest lines) — used preferentially
+SHARP_BOOKS = {"pinnacle", "lowvig", "novig"}
+
+def build_fair_odds_index(sportsbook_entries):
+    """
+    Build a fair-odds index from sportsbook data.
+    Groups outcomes by (event_key, market_type, outcome_name, point),
+    devig using Pinnacle when available, else consensus of all books.
+    Returns dict keyed by (event_key, market_type) → dict of outcome fair probs.
+    """
+    # Group: (home_team, away_team, market_type) → { outcome_key → [(bookmaker, implied_prob)] }
+    market_groups = defaultdict(lambda: defaultdict(list))
+
+    for sb in sportsbook_entries:
+        home = sb.get("home_team", "")
+        away = sb.get("away_team", "")
+        mtype = sb.get("market_type", "")
+        outcome = sb.get("outcome_name", "")
+        point = sb.get("outcome_point")
+        prob = sb.get("implied_prob", 0)
+        bk = sb.get("bookmaker", "")
+
+        if prob <= 0 or prob >= 1:
+            continue
+
+        event_key = f"{away}@{home}"
+        outcome_key = f"{outcome}|{point}" if point is not None else outcome
+        market_groups[(event_key, mtype)][outcome_key].append((bk, prob))
+
+    # Devig each market group
+    fair_index = {}  # (event_key, mtype) → { outcome_key → fair_prob }
+
+    for (event_key, mtype), outcomes in market_groups.items():
+        fair_probs = {}
+
+        # Try Pinnacle/sharp books first
+        sharp_total = 0
+        sharp_probs = {}
+        for okey, entries in outcomes.items():
+            sharp_entries = [(bk, p) for bk, p in entries if bk in SHARP_BOOKS]
+            if sharp_entries:
+                # Use the sharpest book's price (Pinnacle preferred)
+                pin = [p for bk, p in sharp_entries if bk == "pinnacle"]
+                sharp_probs[okey] = pin[0] if pin else sharp_entries[0][1]
+                sharp_total += sharp_probs[okey]
+
+        if sharp_probs and sharp_total > 0:
+            # Devig sharp lines
+            for okey, raw_prob in sharp_probs.items():
+                fair_probs[okey] = raw_prob / sharp_total
+        else:
+            # Fallback: consensus across all books (median implied prob)
+            consensus_total = 0
+            for okey, entries in outcomes.items():
+                probs = sorted([p for _, p in entries])
+                median = probs[len(probs) // 2]  # simple median
+                fair_probs[okey] = median
+                consensus_total += median
+            if consensus_total > 0:
+                for okey in fair_probs:
+                    fair_probs[okey] /= consensus_total
+
+        fair_index[(event_key, mtype)] = fair_probs
+
+    return fair_index
+
+
+def compute_ev(price, fair_prob, fee_rate=0.0):
+    """
+    Compute expected value of a bet.
+    price: implied probability (cost) of the bet
+    fair_prob: estimated true probability of winning
+    fee_rate: fee as fraction of winnings
+    Returns EV as percentage (e.g., 5.0 means +5% EV).
+    """
+    if price <= 0 or price >= 1 or fair_prob <= 0:
+        return None
+    payout = 1.0 / price
+    effective_payout = payout - (payout - 1.0) * fee_rate
+    ev = effective_payout * fair_prob - 1.0
+    return ev * 100
+
+
+def find_ev_opportunities(prediction_markets, sportsbook_entries, fair_index, min_ev_pct=2.0):
+    """
+    Find +EV opportunities where prediction market prices beat fair odds.
+    Reuses the existing matching engine to pair prediction markets with sportsbook events.
+    """
+    opportunities = []
+    KALSHI_FEE_COEFF = 0.07
+    POLYMARKET_FEE = 0.02
+
+    # Build team index
+    team_index = defaultdict(set)
+    for i, sb in enumerate(sportsbook_entries):
+        for team in sb.get("teams", []):
+            if team:
+                team_index[team].add(i)
+
+    for pred in prediction_markets:
+        source = pred.get("source", "")
+        prices = pred.get("prices", [])
+        outcomes = pred.get("outcomes", [])
+
+        if len(prices) < 2 or len(outcomes) < 2:
+            continue
+
+        yes_price = prices[0]
+        no_price = prices[1]
+        if yes_price <= 0 or yes_price >= 1:
+            continue
+        if yes_price + no_price < 0.90:
+            continue  # illiquid
+
+        is_kalshi = source != "polymarket"
+
+        pred_teams = pred.get("teams", [])
+        if not pred_teams:
+            continue
+
+        # Get candidate sportsbook entries by team
+        candidate_indices = set()
+        for team in pred_teams:
+            candidate_indices.update(team_index.get(team, set()))
+        if not candidate_indices:
+            continue
+        candidates = [sportsbook_entries[i] for i in candidate_indices]
+
+        # Filter by sport
+        pred_sport = pred.get("_sport_category")
+        if pred_sport:
+            candidates = [c for c in candidates if not c.get("_sport_category") or c["_sport_category"] == pred_sport]
+
+        # Filter by market type
+        pred_subtype = pred.get("_market_subtype", "unknown")
+        allowed_sb_types = _MARKET_TYPE_COMPAT.get(pred_subtype, _MARKET_TYPE_COMPAT["unknown"])
+        if not allowed_sb_types:
+            continue
+        candidates = [c for c in candidates if c.get("market_type") in allowed_sb_types]
+
+        if pred_subtype == "h2h" and pred.get("_sport_category") == "soccer":
+            continue
+
+        # For totals/spreads, require matching point line
+        if pred_subtype in ("totals", "spreads", "player_props"):
+            pred_line = pred.get("_floor_strike") or _extract_point_line(pred.get("question", ""))
+            if pred_line is not None:
+                candidates = [c for c in candidates
+                              if c.get("outcome_point") is not None
+                              and abs(c["outcome_point"] - pred_line) < 0.01]
+            else:
+                continue
+
+        if not candidates:
+            continue
+
+        # Match prediction to sportsbook
+        matches = try_match_prediction_to_sportsbook(pred, candidates)
+        if not matches:
+            continue
+
+        best_match = matches[0]
+        sb = best_match["sportsbook_entry"]
+        confidence = best_match["confidence"]
+
+        # Find the fair odds for this event/market
+        home = sb.get("home_team", "")
+        away = sb.get("away_team", "")
+        mtype = sb.get("market_type", "")
+        event_key = f"{away}@{home}"
+
+        fair_probs = fair_index.get((event_key, mtype))
+        if not fair_probs:
+            continue
+
+        # Determine side alignment (same logic as arb engine)
+        sb_prob = sb.get("implied_prob", 0)
+        if sb_prob <= 0 or sb_prob >= 1:
+            continue
+
+        sb_market_type = sb.get("market_type", "")
+
+        if pred_subtype in ("totals", "player_props") and sb_market_type in ("totals", "player_points", "player_rebounds", "player_assists", "player_threes"):
+            pred_text = (pred.get("question", "") + " " + pred.get("description", "") + " "
+                         + pred.get("_no_sub_title", "")).lower()
+            sb_outcome_lower = sb.get("outcome_name", "").lower()
+            has_over = bool(re.search(r'\bover\b', pred_text))
+            has_under = bool(re.search(r'\bunder\b', pred_text))
+            if has_over or has_under:
+                pred_is_over = has_over and not has_under
+                sb_is_over = sb_outcome_lower == "over"
+                sb_same_as_yes = (pred_is_over == sb_is_over)
+            else:
+                diff_yes = abs(yes_price - sb_prob)
+                diff_no = abs(no_price - sb_prob)
+                sb_same_as_yes = (diff_yes <= diff_no)
+        elif pred_subtype == "h2h":
+            yes_team_label = pred.get("_no_sub_title", "").strip()
+            sb_outcome_name = sb.get("outcome_name", "").strip()
+            if yes_team_label and sb_outcome_name:
+                yes_tokens = set(normalize_name(yes_team_label).split())
+                sb_tokens = set(normalize_name(sb_outcome_name).split())
+                overlap = yes_tokens & sb_tokens
+                overlap -= {"fc", "city", "united", "the", "de", "la"}
+                sb_same_as_yes = len(overlap) > 0
+            else:
+                diff_yes = abs(yes_price - sb_prob)
+                diff_no = abs(no_price - sb_prob)
+                sb_same_as_yes = (diff_yes <= diff_no)
+        else:
+            diff_yes = abs(yes_price - sb_prob)
+            diff_no = abs(no_price - sb_prob)
+            sb_same_as_yes = (diff_yes <= diff_no)
+
+        # Determine which fair prob to compare against
+        sb_outcome = sb.get("outcome_name", "")
+        sb_point = sb.get("outcome_point")
+        outcome_key = f"{sb_outcome}|{sb_point}" if sb_point is not None else sb_outcome
+
+        # For the prediction side, we want fair_prob of the OPPOSING outcome
+        # If sb is same as YES, we're betting pred NO → fair_prob of losing side for sb
+        if sb_same_as_yes:
+            pred_price = no_price
+            pred_side_raw = "No"
+            # We need fair prob of the "other" outcome (NOT the sb outcome)
+            other_keys = [k for k in fair_probs if k != outcome_key]
+            if not other_keys:
+                continue
+            fair_prob = fair_probs.get(other_keys[0], 0)
+        else:
+            pred_price = yes_price
+            pred_side_raw = "Yes"
+            fair_prob = fair_probs.get(outcome_key, 0)
+
+        if fair_prob <= 0:
+            continue
+
+        pred_fee = (KALSHI_FEE_COEFF * pred_price) if is_kalshi else POLYMARKET_FEE
+        ev = compute_ev(pred_price, fair_prob, pred_fee)
+        if ev is None or ev < min_ev_pct:
+            continue
+        if ev > 30:
+            continue  # almost certainly stale data
+
+        # Build side labels
+        pred_line = pred.get("_floor_strike")
+        no_sub = pred.get("_no_sub_title", "")
+        if pred_subtype == "totals" and pred_line is not None:
+            pred_side = f"Over {pred_line}" if pred_side_raw == "Yes" else f"Under {pred_line}"
+        elif pred_subtype == "h2h" and no_sub:
+            yes_team = no_sub.strip()
+            if pred_side_raw == "Yes":
+                pred_side = yes_team
+            else:
+                pred_teams_list = pred.get("teams", [])
+                other = [t for t in pred_teams_list if yes_team.lower() not in t]
+                pred_side = other[0].title() if other else f"Not {yes_team}"
+        else:
+            pred_side = pred_side_raw
+
+        if sb_point is not None and sb_outcome.lower() in ("over", "under"):
+            sb_side = f"{sb_outcome} {sb_point}"
+        elif sb_point is not None:
+            sign = "+" if sb_point > 0 else ""
+            sb_side = f"{sb_outcome} {sign}{sb_point}"
+        else:
+            sb_side = sb_outcome
+
+        # Sport display
+        sport = sb.get("sport", "").replace("_", " ").upper()
+        if "nba" in sport.lower(): sport_display = "NBA"
+        elif "nfl" in sport.lower(): sport_display = "NFL"
+        elif "mlb" in sport.lower(): sport_display = "MLB"
+        elif "nhl" in sport.lower(): sport_display = "NHL"
+        elif "soccer" in sport.lower() or "mls" in sport.lower() or "epl" in sport.lower(): sport_display = "Soccer"
+        elif "mma" in sport.lower(): sport_display = "MMA"
+        else: sport_display = sport[:10] if sport else "Sports"
+
+        # Time
+        commence = sb.get("commence_time", "")
+        is_live = False
+        time_display = ""
+        if commence:
+            try:
+                event_time = datetime.fromisoformat(commence.replace("Z", "+00:00"))
+                now = datetime.now(timezone.utc)
+                if event_time < now:
+                    is_live = True
+                    time_display = "LIVE"
+                else:
+                    delta = event_time - now
+                    if delta.days > 0: time_display = f"{delta.days}d"
+                    elif delta.seconds > 3600: time_display = f"{delta.seconds // 3600}h"
+                    else: time_display = f"{delta.seconds // 60}m"
+            except Exception:
+                time_display = ""
+
+        base_event = sb.get("event_name", pred.get("question", "")[:60])
+        if pred_subtype == "totals" and pred_line is not None:
+            event_display = f"{base_event} — O/U {pred_line}"
+        elif pred_subtype == "h2h":
+            event_display = f"{base_event} — ML"
+        else:
+            event_display = base_event
+
+        opp = {
+            "id": hashlib.md5(f"ev-{pred.get('id','')}-{sb.get('bookmaker','')}-{pred_side}".encode()).hexdigest()[:12],
+            "type": "ev",
+            "sport": sport_display,
+            "event": event_display,
+            "event_detail": pred.get("question", ""),
+            "commence_time": commence,
+            "time_display": time_display,
+            "is_live": is_live,
+            "platform_a": {
+                "name": source.capitalize(),
+                "side": pred_side,
+                "price": round(pred_price, 4),
+                "implied_prob": round(pred_price, 4),
+                "american_odds": implied_prob_to_american(pred_price),
+                "fee_pct": round(pred_fee * 100, 2),
+                "url": pred.get("url", ""),
+                "market_id": pred.get("id", ""),
+            },
+            "platform_b": {
+                "name": sb.get("bookmaker_title", sb.get("bookmaker", "")),
+                "side": sb_side + " (ref)",
+                "price": sb.get("american_odds", 0),
+                "implied_prob": round(sb_prob, 4),
+                "american_odds": sb.get("american_odds", 0),
+                "fee_pct": 0,
+                "url": "",
+                "market_id": "",
+            },
+            "market_type": sb.get("market_type", "h2h"),
+            "gross_arb_pct": 0,
+            "net_arb_pct": round(ev, 3),
+            "ev_pct": round(ev, 3),
+            "consensus_prob": round(fair_prob, 4),
+            "match_confidence": round(confidence, 2),
+            "resolution_risk": "medium",
+            "risk_note": f"+EV bet: {round(ev, 1)}% edge vs consensus fair odds. Not a guaranteed arb — variance applies.",
+            "is_prop": sb.get("is_prop", False),
+            "liquidity": pred.get("liquidity", 0),
+            "volume": pred.get("volume", 0),
+        }
+        opportunities.append(opp)
+
+    # Deduplicate: keep best EV per event+platform
+    seen = {}
+    for opp in opportunities:
+        key = f"{opp['event']}-{opp['platform_a']['name']}-{opp['market_type']}"
+        if key not in seen or opp['ev_pct'] > seen[key]['ev_pct']:
+            seen[key] = opp
+
+    return sorted(seen.values(), key=lambda x: x['ev_pct'], reverse=True)
+
+
+def find_cross_sportsbook_opportunities(sportsbook_entries, fair_index, min_ev_pct=2.0):
+    """
+    Find cross-sportsbook arbs and +EV bets.
+    Groups sportsbook entries by event, finds best prices on opposing sides.
+    """
+    opportunities = []
+
+    # Group by (event_key, market_type, outcome_point) to find opposing sides
+    event_groups = defaultdict(lambda: defaultdict(list))
+    for sb in sportsbook_entries:
+        home = sb.get("home_team", "")
+        away = sb.get("away_team", "")
+        mtype = sb.get("market_type", "")
+        outcome = sb.get("outcome_name", "")
+        point = sb.get("outcome_point")
+        event_key = f"{away}@{home}"
+
+        group_key = (event_key, mtype, point)
+        event_groups[group_key][outcome].append(sb)
+
+    for (event_key, mtype, point), outcome_map in event_groups.items():
+        outcomes = list(outcome_map.keys())
+        if len(outcomes) < 2:
+            continue
+
+        # For h2h: two team names. For totals: Over/Under.
+        for i in range(len(outcomes)):
+            for j in range(i + 1, len(outcomes)):
+                side_a_entries = outcome_map[outcomes[i]]
+                side_b_entries = outcome_map[outcomes[j]]
+
+                # Find best price (lowest implied prob = best odds) for each side
+                best_a = min(side_a_entries, key=lambda x: x.get("implied_prob", 1))
+                best_b = min(side_b_entries, key=lambda x: x.get("implied_prob", 1))
+
+                # Skip if same bookmaker
+                if best_a.get("bookmaker") == best_b.get("bookmaker"):
+                    continue
+
+                prob_a = best_a.get("implied_prob", 0)
+                prob_b = best_b.get("implied_prob", 0)
+                if prob_a <= 0 or prob_b <= 0 or prob_a >= 1 or prob_b >= 1:
+                    continue
+
+                cost = prob_a + prob_b
+                if cost < 1.0:
+                    # Full arb between sportsbooks
+                    gross_pct = (1.0 - cost) * 100
+                    if gross_pct > 15:
+                        continue  # stale data
+
+                    commence = best_a.get("commence_time", "")
+                    is_live = False
+                    time_display = ""
+                    if commence:
+                        try:
+                            event_time = datetime.fromisoformat(commence.replace("Z", "+00:00"))
+                            now = datetime.now(timezone.utc)
+                            if event_time < now:
+                                is_live = True
+                                time_display = "LIVE"
+                            else:
+                                delta = event_time - now
+                                if delta.days > 0: time_display = f"{delta.days}d"
+                                elif delta.seconds > 3600: time_display = f"{delta.seconds // 3600}h"
+                                else: time_display = f"{delta.seconds // 60}m"
+                        except Exception:
+                            pass
+
+                    sport = best_a.get("sport", "").replace("_", " ").upper()
+                    if "nba" in sport.lower(): sport_display = "NBA"
+                    elif "nfl" in sport.lower(): sport_display = "NFL"
+                    elif "mlb" in sport.lower(): sport_display = "MLB"
+                    elif "nhl" in sport.lower(): sport_display = "NHL"
+                    elif "soccer" in sport.lower() or "mls" in sport.lower() or "epl" in sport.lower(): sport_display = "Soccer"
+                    elif "mma" in sport.lower(): sport_display = "MMA"
+                    else: sport_display = sport[:10] if sport else "Sports"
+
+                    side_a = outcomes[i]
+                    side_b = outcomes[j]
+                    if point is not None:
+                        if side_a.lower() in ("over", "under"):
+                            side_a = f"{side_a} {point}"
+                            side_b = f"{side_b} {point}"
+                        else:
+                            sign_a = "+" if point > 0 else ""
+                            sign_b = "+" if (-point if point else 0) > 0 else ""
+                            side_a = f"{side_a} {sign_a}{point}"
+                            side_b = f"{side_b} {sign_b}{-point if point else ''}"
+
+                    opp = {
+                        "id": hashlib.md5(f"xsb-{event_key}-{mtype}-{outcomes[i]}-{outcomes[j]}".encode()).hexdigest()[:12],
+                        "type": "arb",
+                        "sport": sport_display,
+                        "event": f"{event_key.replace('@', ' @ ')} — {'ML' if mtype == 'h2h' else mtype.replace('_', ' ').title()}",
+                        "event_detail": f"Sportsbook arb: {best_a.get('bookmaker_title', '')} vs {best_b.get('bookmaker_title', '')}",
+                        "commence_time": commence,
+                        "time_display": time_display,
+                        "is_live": is_live,
+                        "platform_a": {
+                            "name": best_a.get("bookmaker_title", best_a.get("bookmaker", "")),
+                            "side": side_a,
+                            "price": best_a.get("american_odds", 0),
+                            "implied_prob": round(prob_a, 4),
+                            "american_odds": best_a.get("american_odds", 0),
+                            "fee_pct": 0,
+                            "url": "",
+                            "market_id": "",
+                        },
+                        "platform_b": {
+                            "name": best_b.get("bookmaker_title", best_b.get("bookmaker", "")),
+                            "side": side_b,
+                            "price": best_b.get("american_odds", 0),
+                            "implied_prob": round(prob_b, 4),
+                            "american_odds": best_b.get("american_odds", 0),
+                            "fee_pct": 0,
+                            "url": "",
+                            "market_id": "",
+                        },
+                        "market_type": mtype,
+                        "gross_arb_pct": round(gross_pct, 3),
+                        "net_arb_pct": round(gross_pct, 3),
+                        "ev_pct": 0,
+                        "consensus_prob": 0,
+                        "match_confidence": 1.0,
+                        "resolution_risk": "low",
+                        "risk_note": "Cross-sportsbook arb — same event, different bookmakers. Low risk.",
+                        "is_prop": best_a.get("is_prop", False),
+                        "liquidity": 0,
+                        "volume": 0,
+                    }
+                    opportunities.append(opp)
+                else:
+                    # No full arb — check for +EV on the best-priced side
+                    fair_probs = fair_index.get((event_key, mtype))
+                    if not fair_probs:
+                        continue
+
+                    # Check each side for +EV
+                    for side_idx, (best, outcome_name) in enumerate([(best_a, outcomes[i]), (best_b, outcomes[j])]):
+                        prob = best.get("implied_prob", 0)
+                        outcome_key = f"{outcome_name}|{point}" if point is not None else outcome_name
+                        fair_p = fair_probs.get(outcome_key, 0)
+                        if fair_p <= 0:
+                            continue
+
+                        ev = compute_ev(prob, fair_p)
+                        if ev is None or ev < min_ev_pct or ev > 30:
+                            continue
+
+                        commence = best.get("commence_time", "")
+                        is_live = False
+                        time_display = ""
+                        if commence:
+                            try:
+                                event_time = datetime.fromisoformat(commence.replace("Z", "+00:00"))
+                                now = datetime.now(timezone.utc)
+                                if event_time < now:
+                                    is_live = True
+                                    time_display = "LIVE"
+                                else:
+                                    delta = event_time - now
+                                    if delta.days > 0: time_display = f"{delta.days}d"
+                                    elif delta.seconds > 3600: time_display = f"{delta.seconds // 3600}h"
+                                    else: time_display = f"{delta.seconds // 60}m"
+                            except Exception:
+                                pass
+
+                        sport = best.get("sport", "").replace("_", " ").upper()
+                        if "nba" in sport.lower(): sport_display = "NBA"
+                        elif "nfl" in sport.lower(): sport_display = "NFL"
+                        elif "mlb" in sport.lower(): sport_display = "MLB"
+                        elif "nhl" in sport.lower(): sport_display = "NHL"
+                        elif "soccer" in sport.lower() or "mls" in sport.lower() or "epl" in sport.lower(): sport_display = "Soccer"
+                        elif "mma" in sport.lower(): sport_display = "MMA"
+                        else: sport_display = sport[:10] if sport else "Sports"
+
+                        side_label = outcome_name
+                        if point is not None:
+                            if outcome_name.lower() in ("over", "under"):
+                                side_label = f"{outcome_name} {point}"
+                            else:
+                                sign = "+" if point > 0 else ""
+                                side_label = f"{outcome_name} {sign}{point}"
+
+                        # Reference side (consensus)
+                        other_outcome = outcomes[j] if side_idx == 0 else outcomes[i]
+                        other_best = best_b if side_idx == 0 else best_a
+
+                        opp = {
+                            "id": hashlib.md5(f"xev-{event_key}-{mtype}-{outcome_name}-{best.get('bookmaker','')}".encode()).hexdigest()[:12],
+                            "type": "ev",
+                            "sport": sport_display,
+                            "event": f"{event_key.replace('@', ' @ ')} — {'ML' if mtype == 'h2h' else mtype.replace('_', ' ').title()}",
+                            "event_detail": f"+EV: {best.get('bookmaker_title', '')} {side_label} vs consensus fair odds",
+                            "commence_time": commence,
+                            "time_display": time_display,
+                            "is_live": is_live,
+                            "platform_a": {
+                                "name": best.get("bookmaker_title", best.get("bookmaker", "")),
+                                "side": side_label,
+                                "price": best.get("american_odds", 0),
+                                "implied_prob": round(prob, 4),
+                                "american_odds": best.get("american_odds", 0),
+                                "fee_pct": 0,
+                                "url": "",
+                                "market_id": "",
+                            },
+                            "platform_b": {
+                                "name": "Consensus",
+                                "side": f"Fair: {round(fair_p * 100, 1)}%",
+                                "price": 0,
+                                "implied_prob": round(fair_p, 4),
+                                "american_odds": implied_prob_to_american(fair_p),
+                                "fee_pct": 0,
+                                "url": "",
+                                "market_id": "",
+                            },
+                            "market_type": mtype,
+                            "gross_arb_pct": 0,
+                            "net_arb_pct": round(ev, 3),
+                            "ev_pct": round(ev, 3),
+                            "consensus_prob": round(fair_p, 4),
+                            "match_confidence": 1.0,
+                            "resolution_risk": "medium",
+                            "risk_note": f"+EV bet: {round(ev, 1)}% edge vs devigged consensus. Variance applies — use Kelly sizing.",
+                            "is_prop": best.get("is_prop", False),
+                            "liquidity": 0,
+                            "volume": 0,
+                        }
+                        opportunities.append(opp)
+
+    # Deduplicate
+    seen = {}
+    for opp in opportunities:
+        key = f"{opp['event']}-{opp['platform_a']['name']}-{opp['platform_a']['side']}"
+        if key not in seen or (opp.get('ev_pct', 0) + opp.get('gross_arb_pct', 0)) > (seen[key].get('ev_pct', 0) + seen[key].get('gross_arb_pct', 0)):
+            seen[key] = opp
+
+    return sorted(seen.values(), key=lambda x: x.get('ev_pct', 0) + x.get('net_arb_pct', 0), reverse=True)
 
 
 # ─── Core scan logic (callable from CGI or Vercel handler) ───────────────────
@@ -1559,15 +2164,50 @@ def run_scan(params):
         cross_arbs = find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct)
         all_opportunities.extend(cross_arbs)
 
+    # +EV detection: build fair odds index, find +EV opportunities
+    fair_index = {}
+    if sportsbook_entries:
+        fair_index = build_fair_odds_index(sportsbook_entries)
+
+        # +EV: prediction markets vs fair odds
+        if poly_markets:
+            ev1 = find_ev_opportunities(poly_markets, sportsbook_entries, fair_index)
+            all_opportunities.extend(ev1)
+        if kalshi_markets:
+            ev2 = find_ev_opportunities(kalshi_markets, sportsbook_entries, fair_index)
+            all_opportunities.extend(ev2)
+
+        # Cross-sportsbook arbs & +EV
+        xsb = find_cross_sportsbook_opportunities(sportsbook_entries, fair_index)
+        all_opportunities.extend(xsb)
+
     # Apply sports filter
     if sports_filter and sports_filter[0]:
         sports_set = set(s.upper() for s in sports_filter)
         all_opportunities = [o for o in all_opportunities if o["sport"].upper() in sports_set]
 
-    # Sort by net arb %
-    all_opportunities.sort(key=lambda x: x["net_arb_pct"], reverse=True)
+    # Deduplicate across all sources by id
+    seen_ids = {}
+    for opp in all_opportunities:
+        oid = opp["id"]
+        if oid not in seen_ids:
+            seen_ids[oid] = opp
+        else:
+            # Keep the better one
+            existing = seen_ids[oid]
+            if opp.get("ev_pct", 0) + opp.get("net_arb_pct", 0) > existing.get("ev_pct", 0) + existing.get("net_arb_pct", 0):
+                seen_ids[oid] = opp
+    all_opportunities = list(seen_ids.values())
+
+    # Sort: arbs by net_arb_pct, +EV by ev_pct, arbs first
+    all_opportunities.sort(
+        key=lambda x: (0 if x.get("type") == "arb" else 1, -(x.get("net_arb_pct", 0) + x.get("ev_pct", 0))),
+    )
 
     scan_duration = round(time.time() - scan_start, 2)
+
+    arb_count = sum(1 for o in all_opportunities if o.get("type") == "arb")
+    ev_count = sum(1 for o in all_opportunities if o.get("type") == "ev")
 
     return {
         "opportunities": all_opportunities,
@@ -1575,6 +2215,8 @@ def run_scan(params):
             "scan_time": scan_duration,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "total_opportunities": len(all_opportunities),
+            "arb_count": arb_count,
+            "ev_count": ev_count,
             "sources": sources_status,
             "errors": errors,
             "is_demo": False,

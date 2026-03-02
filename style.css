@@ -759,6 +759,34 @@ body::after {
   letter-spacing: 2px;
 }
 
+.table-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.btn-sm {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 600;
+  padding: 5px 12px;
+  border: 1px solid var(--border-highlight);
+  border-radius: 100px;
+  background: var(--bg-glass);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.25s ease;
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  outline: none;
+}
+.btn-sm:hover {
+  background: var(--bg-hover);
+  color: var(--text-bright);
+  border-color: var(--text-dim);
+}
+
 .table-count {
   font-family: var(--font-mono);
   font-size: 0.68rem;
@@ -860,6 +888,52 @@ tr.tier-marginal:hover td {
 tr.tier-weak { opacity: 0.45; }
 tr.tier-weak:hover { opacity: 0.65; }
 
+/* +EV row tint */
+tr.tier-ev td {
+  background: rgba(77, 166, 255, 0.02);
+}
+tr.tier-ev td:first-child {
+  box-shadow: inset 4px 0 0 var(--blue);
+}
+tr.tier-ev:hover td {
+  background: rgba(77, 166, 255, 0.05);
+}
+
+/* Kelly sizing in detail panel */
+.kelly-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 10px;
+  margin-top: 12px;
+}
+.kelly-card {
+  background: var(--bg-glass);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  text-align: center;
+}
+.kelly-card .kelly-label {
+  font-family: var(--font-mono);
+  font-size: 0.56rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 6px;
+}
+.kelly-card .kelly-value {
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  font-weight: 800;
+  color: var(--blue);
+}
+.kelly-card .kelly-amount {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
 /* ── Sport Tags ──────────────────────────────────────────────────────────── */
 .sport-tag {
   display: inline-block;
@@ -919,9 +993,21 @@ tr.tier-weak:hover { opacity: 0.65; }
 .platform-name.kalshi      { color: #22d3ee; }
 .platform-name.draftkings  { color: #4ade80; }
 .platform-name.fanduel     { color: #60a5fa; }
+.platform-name.fanatics    { color: #34d399; }
 .platform-name.betrivers   { color: #fbbf24; }
 .platform-name.pinnacle    { color: #f472b6; }
 .platform-name.betmgm      { color: #c084fc; }
+.platform-name.espnbet     { color: #f87171; }
+.platform-name.hardrock    { color: #fb923c; }
+.platform-name.lowvig      { color: #a3e635; }
+.platform-name.novig       { color: #67e8f9; }
+.platform-name.betonline   { color: #fca5a5; }
+.platform-name.mybookie    { color: #d8b4fe; }
+.platform-name.betus       { color: #fde047; }
+.platform-name.ballybet    { color: #7dd3fc; }
+.platform-name.betparx     { color: #86efac; }
+.platform-name.bovada      { color: #fdba74; }
+.platform-name.caesars     { color: #e2e8f0; }
 
 /* ── Odds & Profit Cells ─────────────────────────────────────────────────── */
 .odds-cell { font-weight: 500; color: var(--text-secondary); }
@@ -937,16 +1023,36 @@ tr.tier-weak:hover { opacity: 0.65; }
 .risk-medium { color: var(--yellow); }
 .risk-high   { color: var(--red); }
 
+/* ── Type Badge ──────────────────────────────────────────────────────────── */
+.type-badge {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 100px;
+  font-size: 0.52rem;
+  font-weight: 900;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.type-badge.arb {
+  background: var(--green-bg-strong);
+  color: var(--green);
+  border: 1px solid var(--green-border);
+}
+.type-badge.ev {
+  background: var(--blue-bg);
+  color: var(--blue);
+  border: 1px solid rgba(77, 166, 255, 0.25);
+}
+
 /* ── Column Widths ───────────────────────────────────────────────────────── */
+.col-type     { width: 56px; }
 .col-sport    { width: 74px; }
-.col-event    { width: 210px; }
-.col-time     { width: 65px; }
-.col-platform { width: 100px; }
-.col-side     { width: 74px; }
-.col-odds     { width: 80px; }
-.col-gross    { width: 76px; }
-.col-net      { width: 76px; }
-.col-liq      { width: 78px; }
+.col-event    { width: 200px; }
+.col-time     { width: 60px; }
+.col-platform { width: 95px; }
+.col-side     { width: 70px; }
+.col-odds     { width: 75px; }
+.col-edge     { width: 76px; }
 .col-risk     { width: 44px; }
 .col-action   { width: 55px; }
 
@@ -1509,8 +1615,36 @@ tr.new-row-enter:nth-child(25) { animation-delay: 0.48s; }
   .stats-bar { grid-template-columns: repeat(3, 1fr); }
 }
 
+/* ── Mobile sidebar overlay ─────────────────────────────────────────────── */
+.burger-btn { display: none; }
+
+.sidebar-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 4, 8, 0.7);
+  backdrop-filter: blur(4px);
+  z-index: 90;
+}
+.sidebar-backdrop.open { display: block; }
+
 @media (max-width: 960px) {
-  .sidebar { display: none; }
+  .burger-btn { display: flex; }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 95;
+    transform: translateX(-100%);
+    transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    width: 270px;
+    min-width: 270px;
+    box-shadow: var(--shadow-lg);
+  }
+  .sidebar.open {
+    transform: translateX(0);
+  }
   .detail-grid { grid-template-columns: 1fr; }
   .stats-bar { grid-template-columns: repeat(3, 1fr); }
 }

@@ -19,6 +19,7 @@
     <!-- ═══ TOP BAR ═══ -->
     <header class="topbar">
       <div class="topbar-left">
+        <button class="btn btn-icon burger-btn" id="btnBurger" title="Filters" aria-label="Open filters">☰</button>
         <div>
           <div class="logo">⚡ ARBSCANNER</div>
           <div class="logo-sub">Prediction Market × Sportsbook Arb Monitor</div>
@@ -61,6 +62,8 @@
     <!-- ═══ MAIN CONTENT ═══ -->
     <div class="main-content">
 
+      <!-- ─── Sidebar Backdrop (mobile) ─── -->
+      <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
       <!-- ─── Sidebar ─── -->
       <aside class="sidebar" id="sidebar">
         <div class="sidebar-section">
@@ -85,11 +88,21 @@
             <div class="filter-toggle"><input type="checkbox" id="fBetRivers" checked><label for="fBetRivers">BetRivers</label></div>
             <div class="filter-toggle"><input type="checkbox" id="fPinnacle" checked><label for="fPinnacle">Pinnacle</label></div>
             <div class="filter-toggle"><input type="checkbox" id="fBetMGM" checked><label for="fBetMGM">BetMGM</label></div>
+            <div class="filter-toggle"><input type="checkbox" id="fFanatics" checked><label for="fFanatics">Fanatics</label></div>
+            <div class="filter-toggle"><input type="checkbox" id="fESPNBET" checked><label for="fESPNBET">ESPN BET</label></div>
+            <div class="filter-toggle"><input type="checkbox" id="fHardRock" checked><label for="fHardRock">Hard Rock</label></div>
+            <div class="filter-toggle"><input type="checkbox" id="fLowVig" checked><label for="fLowVig">LowVig</label></div>
+            <div class="filter-toggle"><input type="checkbox" id="fNovig" checked><label for="fNovig">Novig</label></div>
+            <div class="filter-toggle"><input type="checkbox" id="fBetOnline" checked><label for="fBetOnline">BetOnline</label></div>
+            <div class="filter-toggle"><input type="checkbox" id="fMyBookie" checked><label for="fMyBookie">MyBookie</label></div>
+            <div class="filter-toggle"><input type="checkbox" id="fBetUS" checked><label for="fBetUS">BetUS</label></div>
+            <div class="filter-toggle"><input type="checkbox" id="fBallyBet" checked><label for="fBallyBet">Bally Bet</label></div>
+            <div class="filter-toggle"><input type="checkbox" id="fBetParx" checked><label for="fBetParx">BetParx</label></div>
           </div>
         </div>
 
         <div class="sidebar-section">
-          <h3>Min Net Profit</h3>
+          <h3>Min Edge %</h3>
           <div class="range-input">
             <input type="range" id="minProfitSlider" min="0" max="10" step="0.5" value="0">
             <div class="range-label">
@@ -111,6 +124,14 @@
         </div>
 
         <div class="sidebar-section">
+          <h3>Opportunity Type</h3>
+          <div class="filter-group">
+            <div class="filter-toggle"><input type="checkbox" id="fShowArbs" checked><label for="fShowArbs">Arb Opportunities</label></div>
+            <div class="filter-toggle"><input type="checkbox" id="fShowEV" checked><label for="fShowEV">+EV Bets</label></div>
+          </div>
+        </div>
+
+        <div class="sidebar-section">
           <h3>Options</h3>
           <div class="filter-group">
             <div class="filter-toggle"><input type="checkbox" id="fIncludeLive" checked><label for="fIncludeLive">Include live events</label></div>
@@ -120,8 +141,8 @@
         <div class="sidebar-section">
           <h3>Sort By</h3>
           <select id="sortSelect">
-            <option value="net_pct">Net Profit %</option>
-            <option value="gross_pct">Gross Profit %</option>
+            <option value="edge">Edge % (Net / EV)</option>
+            <option value="gross_pct">Gross Arb %</option>
             <option value="time">Time to Event</option>
             <option value="liquidity">Liquidity</option>
             <option value="confidence">Match Confidence</option>
@@ -172,14 +193,18 @@
           </div>
 
           <div class="table-header-bar">
-            <span class="table-title">Arbitrage Opportunities</span>
-            <span class="table-count" id="tableCount">0 results</span>
+            <span class="table-title">Opportunities</span>
+            <div class="table-header-actions">
+              <button class="btn btn-sm" id="btnExportCSV" title="Export visible results as CSV">⬇ CSV</button>
+              <span class="table-count" id="tableCount">0 results</span>
+            </div>
           </div>
 
           <div class="table-scroll">
             <table id="arbTable">
               <thead>
                 <tr>
+                  <th class="col-type">Type</th>
                   <th class="col-sport" data-sort="sport">Sport <span class="sort-arrow"></span></th>
                   <th class="col-event" data-sort="event">Event <span class="sort-arrow"></span></th>
                   <th class="col-time" data-sort="time">Time <span class="sort-arrow"></span></th>
@@ -189,8 +214,7 @@
                   <th class="col-platform" data-sort="platform_b">Platform B <span class="sort-arrow"></span></th>
                   <th class="col-side">Side</th>
                   <th class="col-odds">Odds B</th>
-                  <th class="col-gross" data-sort="gross">Gross % <span class="sort-arrow"></span></th>
-                  <th class="col-net" data-sort="net">Net % <span class="sort-arrow"></span></th>
+                  <th class="col-edge" data-sort="net">Edge % <span class="sort-arrow"></span></th>
                   <th class="col-risk">Risk</th>
                   <th class="col-action">Action</th>
                 </tr>
@@ -208,10 +232,10 @@
                     <circle cx="24" cy="24" r="3" fill="currentColor" opacity="0.4"/>
                   </svg>
                 </div>
-                <div class="title">No arbitrage opportunities found</div>
-                <div class="subtitle">Markets are constantly moving. Adjust your filters or wait for the next scan — opportunities appear and disappear in seconds.</div>
+                <div class="title">No opportunities found</div>
+                <div class="subtitle">Markets are constantly moving. Adjust your filters or wait for the next scan — arb and +EV opportunities appear and disappear in seconds.</div>
                 <div class="empty-hint">
-                  <span>TIP: Expand your filters or lower the minimum profit threshold</span>
+                  <span>TIP: Enable +EV bets in the sidebar for more results, or lower the minimum edge threshold</span>
                 </div>
               </div>
             </div>

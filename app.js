@@ -67,10 +67,22 @@ function platformClass(name) {
   if (n.includes("polymarket")) return "polymarket";
   if (n.includes("kalshi")) return "kalshi";
   if (n.includes("draftkings") || n.includes("draft")) return "draftkings";
-  if (n.includes("fanduel") || n.includes("fan")) return "fanduel";
+  if (n.includes("fanduel")) return "fanduel";
+  if (n.includes("fanatics")) return "fanatics";
   if (n.includes("betrivers") || n.includes("rivers")) return "betrivers";
   if (n.includes("pinnacle")) return "pinnacle";
   if (n.includes("betmgm") || n.includes("mgm")) return "betmgm";
+  if (n.includes("espnbet") || n.includes("espn")) return "espnbet";
+  if (n.includes("hardrock") || n.includes("hard rock")) return "hardrock";
+  if (n.includes("lowvig")) return "lowvig";
+  if (n.includes("novig")) return "novig";
+  if (n.includes("betonline")) return "betonline";
+  if (n.includes("mybookie")) return "mybookie";
+  if (n.includes("betus")) return "betus";
+  if (n.includes("ballybet") || n.includes("bally")) return "ballybet";
+  if (n.includes("betparx") || n.includes("parx")) return "betparx";
+  if (n.includes("bovada")) return "bovada";
+  if (n.includes("william hill") || n.includes("caesars")) return "caesars";
   return "";
 }
 
@@ -196,6 +208,43 @@ async function saveConfig(configData) {
   }
 }
 
+// ─── Filter Persistence ───────────────────────────────────────────────────────
+
+const FILTER_STORAGE_KEY = "arbscanner_filters";
+
+function saveFiltersToStorage() {
+  try {
+    const filters = {};
+    document.querySelectorAll(".sidebar input[type='checkbox']").forEach(cb => {
+      filters[cb.id] = cb.checked;
+    });
+    filters._minProfitSlider = document.getElementById("minProfitSlider").value;
+    filters._sortSelect = document.getElementById("sortSelect").value;
+    localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(filters));
+  } catch (e) { /* quota */ }
+}
+
+function restoreFiltersFromStorage() {
+  try {
+    const saved = localStorage.getItem(FILTER_STORAGE_KEY);
+    if (!saved) return;
+    const filters = JSON.parse(saved);
+    for (const [id, checked] of Object.entries(filters)) {
+      if (id.startsWith("_")) continue;
+      const el = document.getElementById(id);
+      if (el && el.type === "checkbox") el.checked = checked;
+    }
+    if (filters._minProfitSlider !== undefined) {
+      const slider = document.getElementById("minProfitSlider");
+      slider.value = filters._minProfitSlider;
+      document.getElementById("minProfitValue").textContent = slider.value + "%";
+    }
+    if (filters._sortSelect !== undefined) {
+      document.getElementById("sortSelect").value = filters._sortSelect;
+    }
+  } catch (e) { /* corrupt */ }
+}
+
 // ─── Filtering ────────────────────────────────────────────────────────────────
 
 function getActiveFilters() {
@@ -215,6 +264,16 @@ function getActiveFilters() {
   if (document.getElementById("fBetRivers").checked) platforms.push("betrivers");
   if (document.getElementById("fPinnacle").checked) platforms.push("pinnacle");
   if (document.getElementById("fBetMGM").checked) platforms.push("betmgm");
+  if (document.getElementById("fFanatics").checked) platforms.push("fanatics");
+  if (document.getElementById("fESPNBET").checked) platforms.push("espnbet");
+  if (document.getElementById("fHardRock").checked) platforms.push("hardrockbet");
+  if (document.getElementById("fLowVig").checked) platforms.push("lowvig");
+  if (document.getElementById("fNovig").checked) platforms.push("novig");
+  if (document.getElementById("fBetOnline").checked) platforms.push("betonline");
+  if (document.getElementById("fMyBookie").checked) platforms.push("mybookie");
+  if (document.getElementById("fBetUS").checked) platforms.push("betus");
+  if (document.getElementById("fBallyBet").checked) platforms.push("ballybet");
+  if (document.getElementById("fBetParx").checked) platforms.push("betparx");
 
   const marketTypes = [];
   if (document.getElementById("fMoneyline").checked) marketTypes.push("h2h");
@@ -222,10 +281,12 @@ function getActiveFilters() {
   if (document.getElementById("fTotals").checked) marketTypes.push("totals");
   if (document.getElementById("fProps").checked) marketTypes.push("player_points", "player_rebounds", "player_assists", "player_threes");
 
+  const showArbs = document.getElementById("fShowArbs").checked;
+  const showEV = document.getElementById("fShowEV").checked;
   const includeLive = document.getElementById("fIncludeLive").checked;
   const minProfit = parseFloat(document.getElementById("minProfitSlider").value) || 0;
 
-  return { sports, platforms, marketTypes, includeLive, minProfit };
+  return { sports, platforms, marketTypes, showArbs, showEV, includeLive, minProfit };
 }
 
 function applyFilters() {
@@ -233,6 +294,11 @@ function applyFilters() {
   let opps = state.opportunities;
 
   opps = opps.filter(o => {
+    // Type filter
+    const oppType = o.type || "arb";
+    if (oppType === "arb" && !filters.showArbs) return false;
+    if (oppType === "ev" && !filters.showEV) return false;
+
     // Sport filter
     if (filters.sports.length > 0) {
       const s = (o.sport || "").toUpperCase();
@@ -260,8 +326,9 @@ function applyFilters() {
     // Live filter
     if (!filters.includeLive && o.is_live) return false;
 
-    // Min profit
-    if (o.net_arb_pct < filters.minProfit) return false;
+    // Min edge filter — applies to both arb net% and EV%
+    const edgePct = oppType === "ev" ? (o.ev_pct || 0) : o.net_arb_pct;
+    if (edgePct < filters.minProfit) return false;
 
     return true;
   });
@@ -271,7 +338,10 @@ function applyFilters() {
   opps.sort((a, b) => {
     let va, vb;
     switch (sortBy) {
-      case "net_pct": va = a.net_arb_pct; vb = b.net_arb_pct; break;
+      case "edge":
+        va = a.type === "ev" ? (a.ev_pct || 0) : a.net_arb_pct;
+        vb = b.type === "ev" ? (b.ev_pct || 0) : b.net_arb_pct;
+        break;
       case "gross_pct": va = a.gross_arb_pct; vb = b.gross_arb_pct; break;
       case "time":
         va = a.commence_time ? new Date(a.commence_time).getTime() : Infinity;
@@ -279,7 +349,9 @@ function applyFilters() {
         return va - vb; // Ascending for time
       case "liquidity": va = a.liquidity || 0; vb = b.liquidity || 0; break;
       case "confidence": va = a.match_confidence || 0; vb = b.match_confidence || 0; break;
-      default: va = a.net_arb_pct; vb = b.net_arb_pct;
+      default:
+        va = a.type === "ev" ? (a.ev_pct || 0) : a.net_arb_pct;
+        vb = b.type === "ev" ? (b.ev_pct || 0) : b.net_arb_pct;
     }
     return vb - va; // Descending default
   });
@@ -307,7 +379,10 @@ function sortByColumn(opps, col, dir) {
       case "platform_a": va = a.platform_a.name; vb = b.platform_a.name; break;
       case "platform_b": va = a.platform_b.name; vb = b.platform_b.name; break;
       case "gross": va = a.gross_arb_pct; vb = b.gross_arb_pct; break;
-      case "net": va = a.net_arb_pct; vb = b.net_arb_pct; break;
+      case "net":
+        va = (a.type === "ev") ? (a.ev_pct || 0) : a.net_arb_pct;
+        vb = (b.type === "ev") ? (b.ev_pct || 0) : b.net_arb_pct;
+        break;
       default: return 0;
     }
     if (typeof va === "string") {
@@ -339,8 +414,14 @@ function renderTable() {
   let html = "";
   for (const opp of opps) {
     const isNew = !state.previousIds.has(opp.id);
-    const tier = tierClass(opp.net_arb_pct);
+    const isEV = opp.type === "ev";
+    const edgePct = isEV ? (opp.ev_pct || 0) : opp.net_arb_pct;
+    const tier = isEV ? "tier-ev" : tierClass(opp.net_arb_pct);
     const rowClass = `opp-row ${tier} ${isNew ? "new-row-enter" : ""}`;
+
+    const typeBadge = isEV
+      ? '<span class="type-badge ev">+EV</span>'
+      : '<span class="type-badge arb">ARB</span>';
 
     const timeCell = opp.is_live
       ? '<span class="live-badge"><span class="live-pulse"></span>LIVE</span>'
@@ -354,8 +435,13 @@ function renderTable() {
       ? `${formatProb(opp.platform_b.implied_prob)}<br><span style="color:var(--text-dim);font-size:0.6rem">${formatOdds(opp.platform_b.american_odds)}</span>`
       : formatOdds(opp.platform_b.american_odds);
 
+    const edgeLabel = isEV ? `+${formatPct(edgePct)} EV` : formatPct(edgePct);
+    const edgeClass = isEV ? "profit-cell" : `profit-cell ${profitClass(edgePct)}`;
+    const edgeColor = isEV ? 'style="color:var(--blue);text-shadow:0 0 12px rgba(77,166,255,0.2)"' : "";
+
     html += `
       <tr class="${rowClass}" data-id="${opp.id}" onclick="toggleDetail('${opp.id}')">
+        <td>${typeBadge}</td>
         <td><span class="sport-tag ${sportClass(opp.sport)}">${escapeHtml(opp.sport)}</span></td>
         <td title="${escapeHtml(opp.event_detail || opp.event)}" style="white-space:normal;line-height:1.3">${escapeHtml(truncate(opp.event, 35))}</td>
         <td>${timeCell}</td>
@@ -365,8 +451,7 @@ function renderTable() {
         <td><span class="platform-name ${platformClass(opp.platform_b.name)}">${escapeHtml(opp.platform_b.name)}</span></td>
         <td>${escapeHtml(opp.platform_b.side)}</td>
         <td class="odds-cell">${oddsB}</td>
-        <td class="profit-cell ${profitClass(opp.gross_arb_pct)}">${formatPct(opp.gross_arb_pct)}</td>
-        <td class="profit-cell ${profitClass(opp.net_arb_pct)}">${formatPct(opp.net_arb_pct)}</td>
+        <td class="${edgeClass}" ${edgeColor}>${edgeLabel}</td>
         <td>
           <div class="tooltip-wrapper">
             ${riskIcon(opp.resolution_risk)}
@@ -380,45 +465,7 @@ function renderTable() {
       <tr class="detail-panel" id="detail-${opp.id}">
         <td colspan="13">
           <div class="detail-content" id="detail-content-${opp.id}">
-            <div class="detail-grid">
-              <div class="detail-section">
-                <h4>Stake Calculator</h4>
-                <div class="stake-input-row">
-                  <label>Bankroll: $</label>
-                  <input type="number" value="${state.config.default_bankroll || 100}" min="1" onchange="recalcStakes('${opp.id}', this.value)">
-                </div>
-                <div class="stake-result" id="stakes-${opp.id}">
-                  ${renderStakes(opp, state.config.default_bankroll || 100)}
-                </div>
-              </div>
-              <div class="detail-section">
-                <h4>Fee Breakdown</h4>
-                <table class="fee-table">
-                  <tr><td>${escapeHtml(opp.platform_a.name)} fee</td><td>${opp.platform_a.fee_pct.toFixed(1)}%</td></tr>
-                  <tr><td>${escapeHtml(opp.platform_b.name)} fee</td><td>${opp.platform_b.fee_pct.toFixed(1)}%</td></tr>
-                  <tr><td>Gross arb</td><td style="color:var(--green)">${formatPct(opp.gross_arb_pct)}</td></tr>
-                  <tr><td>Net arb (after fees)</td><td style="color:${opp.net_arb_pct >= 1 ? 'var(--green)' : 'var(--yellow)'}">${formatPct(opp.net_arb_pct)}</td></tr>
-                </table>
-                <div style="margin-top:10px;font-size:0.65rem;color:var(--text-dim)">
-                  <strong>Match confidence:</strong> ${(opp.match_confidence * 100).toFixed(0)}%<br>
-                  <strong>Liquidity:</strong> ${formatLiquidity(opp.liquidity)}<br>
-                  <strong>Volume:</strong> ${formatLiquidity(opp.volume)}
-                </div>
-              </div>
-              <div class="detail-section">
-                <h4>Market Details</h4>
-                <div style="font-size:0.72rem;color:var(--text-secondary);line-height:1.6">
-                  <div><strong>Event:</strong> ${escapeHtml(opp.event_detail || opp.event)}</div>
-                  <div><strong>Type:</strong> ${escapeHtml(opp.market_type)}</div>
-                  <div><strong>Status:</strong> ${opp.is_live ? '<span style="color:var(--red)">LIVE</span>' : 'Pre-match'}</div>
-                  ${opp.commence_time ? `<div><strong>Start:</strong> ${new Date(opp.commence_time).toLocaleString()}</div>` : ""}
-                </div>
-                <div class="detail-links">
-                  ${opp.platform_a.url ? `<a href="${opp.platform_a.url}" target="_blank" rel="noopener noreferrer">${escapeHtml(opp.platform_a.name)} →</a>` : ""}
-                  ${opp.platform_b.url ? `<a href="${opp.platform_b.url}" target="_blank" rel="noopener noreferrer">${escapeHtml(opp.platform_b.name)} →</a>` : ""}
-                </div>
-              </div>
-            </div>
+            ${isEV ? renderEVDetail(opp) : renderArbDetail(opp)}
           </div>
         </td>
       </tr>
@@ -453,6 +500,96 @@ function renderStakes(opp, bankroll) {
   `;
 }
 
+function renderArbDetail(opp) {
+  return `
+    <div class="detail-grid">
+      <div class="detail-section">
+        <h4>Stake Calculator</h4>
+        <div class="stake-input-row">
+          <label>Bankroll: $</label>
+          <input type="number" value="${state.config.default_bankroll || 100}" min="1" onchange="recalcStakes('${opp.id}', this.value)">
+        </div>
+        <div class="stake-result" id="stakes-${opp.id}">
+          ${renderStakes(opp, state.config.default_bankroll || 100)}
+        </div>
+      </div>
+      <div class="detail-section">
+        <h4>Fee Breakdown</h4>
+        <table class="fee-table">
+          <tr><td>${escapeHtml(opp.platform_a.name)} fee</td><td>${opp.platform_a.fee_pct.toFixed(1)}%</td></tr>
+          <tr><td>${escapeHtml(opp.platform_b.name)} fee</td><td>${opp.platform_b.fee_pct.toFixed(1)}%</td></tr>
+          <tr><td>Gross arb</td><td style="color:var(--green)">${formatPct(opp.gross_arb_pct)}</td></tr>
+          <tr><td>Net arb (after fees)</td><td style="color:${opp.net_arb_pct >= 1 ? 'var(--green)' : 'var(--yellow)'}">${formatPct(opp.net_arb_pct)}</td></tr>
+        </table>
+        <div style="margin-top:10px;font-size:0.65rem;color:var(--text-dim)">
+          <strong>Match confidence:</strong> ${(opp.match_confidence * 100).toFixed(0)}%<br>
+          <strong>Liquidity:</strong> ${formatLiquidity(opp.liquidity)}<br>
+          <strong>Volume:</strong> ${formatLiquidity(opp.volume)}
+        </div>
+      </div>
+      <div class="detail-section">
+        <h4>Market Details</h4>
+        <div style="font-size:0.72rem;color:var(--text-secondary);line-height:1.6">
+          <div><strong>Event:</strong> ${escapeHtml(opp.event_detail || opp.event)}</div>
+          <div><strong>Type:</strong> ${escapeHtml(opp.market_type)}</div>
+          <div><strong>Status:</strong> ${opp.is_live ? '<span style="color:var(--red)">LIVE</span>' : 'Pre-match'}</div>
+          ${opp.commence_time ? `<div><strong>Start:</strong> ${new Date(opp.commence_time).toLocaleString()}</div>` : ""}
+        </div>
+        <div class="detail-links">
+          ${opp.platform_a.url ? `<a href="${opp.platform_a.url}" target="_blank" rel="noopener noreferrer">${escapeHtml(opp.platform_a.name)} →</a>` : ""}
+          ${opp.platform_b.url ? `<a href="${opp.platform_b.url}" target="_blank" rel="noopener noreferrer">${escapeHtml(opp.platform_b.name)} →</a>` : ""}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderEVDetail(opp) {
+  const bankroll = state.config.default_bankroll || 100;
+  const kelly = computeKelly(opp);
+  return `
+    <div class="detail-grid">
+      <div class="detail-section">
+        <h4>Kelly Criterion Sizing</h4>
+        <div class="stake-input-row">
+          <label>Bankroll: $</label>
+          <input type="number" value="${bankroll}" min="1" onchange="recalcKelly('${opp.id}', this.value)">
+        </div>
+        <div id="kelly-${opp.id}">
+          ${renderKellyCards(kelly, bankroll)}
+        </div>
+      </div>
+      <div class="detail-section">
+        <h4>Edge Analysis</h4>
+        <table class="fee-table">
+          <tr><td>Your price (cost)</td><td style="color:var(--text-primary)">${formatProb(opp.platform_a.implied_prob)}</td></tr>
+          <tr><td>Consensus fair prob</td><td style="color:var(--blue)">${formatProb(opp.consensus_prob)}</td></tr>
+          <tr><td>Fee</td><td>${opp.platform_a.fee_pct.toFixed(1)}%</td></tr>
+          <tr><td>Expected value</td><td style="color:var(--blue);font-weight:800">+${formatPct(opp.ev_pct)}</td></tr>
+        </table>
+        <div style="margin-top:10px;font-size:0.65rem;color:var(--text-dim)">
+          <strong>Match confidence:</strong> ${(opp.match_confidence * 100).toFixed(0)}%<br>
+          <strong>Liquidity:</strong> ${formatLiquidity(opp.liquidity)}<br>
+          <strong>Volume:</strong> ${formatLiquidity(opp.volume)}
+        </div>
+      </div>
+      <div class="detail-section">
+        <h4>Market Details</h4>
+        <div style="font-size:0.72rem;color:var(--text-secondary);line-height:1.6">
+          <div><strong>Event:</strong> ${escapeHtml(opp.event_detail || opp.event)}</div>
+          <div><strong>Bet:</strong> ${escapeHtml(opp.platform_a.name)} — ${escapeHtml(opp.platform_a.side)}</div>
+          <div><strong>Type:</strong> ${escapeHtml(opp.market_type)}</div>
+          <div><strong>Status:</strong> ${opp.is_live ? '<span style="color:var(--red)">LIVE</span>' : 'Pre-match'}</div>
+          ${opp.commence_time ? `<div><strong>Start:</strong> ${new Date(opp.commence_time).toLocaleString()}</div>` : ""}
+        </div>
+        <div class="detail-links">
+          ${opp.platform_a.url ? `<a href="${opp.platform_a.url}" target="_blank" rel="noopener noreferrer">${escapeHtml(opp.platform_a.name)} →</a>` : ""}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function toggleDetail(id) {
   const panel = document.getElementById(`detail-${id}`);
   if (!panel) return;
@@ -484,18 +621,26 @@ function copyOpp(id) {
   const opp = state.filteredOpps.find(o => o.id === id);
   if (!opp) return;
 
-  const text = [
-    `⚡ ArbScanner Alert`,
+  const isEV = opp.type === "ev";
+  const lines = [
+    `⚡ ArbScanner Alert — ${isEV ? "+EV Bet" : "Arbitrage"}`,
     `Event: ${opp.event_detail || opp.event}`,
     `Sport: ${opp.sport}`,
     ``,
     `Platform A: ${opp.platform_a.name} — ${opp.platform_a.side} @ ${formatProb(opp.platform_a.implied_prob)} (${formatOdds(opp.platform_a.american_odds)})`,
     `Platform B: ${opp.platform_b.name} — ${opp.platform_b.side} @ ${formatProb(opp.platform_b.implied_prob)} (${formatOdds(opp.platform_b.american_odds)})`,
     ``,
-    `Gross: ${formatPct(opp.gross_arb_pct)} | Net: ${formatPct(opp.net_arb_pct)}`,
-    `Match confidence: ${(opp.match_confidence * 100).toFixed(0)}%`,
-    `Risk: ${opp.resolution_risk}`,
-  ].join("\n");
+  ];
+  if (isEV) {
+    lines.push(`EV: +${formatPct(opp.ev_pct)} | Fair prob: ${formatProb(opp.consensus_prob)}`);
+    const kelly = computeKelly(opp);
+    if (kelly.full > 0) lines.push(`Kelly: ${(kelly.half * 100).toFixed(1)}% (half)`);
+  } else {
+    lines.push(`Gross: ${formatPct(opp.gross_arb_pct)} | Net: ${formatPct(opp.net_arb_pct)}`);
+  }
+  lines.push(`Match confidence: ${(opp.match_confidence * 100).toFixed(0)}%`);
+  lines.push(`Risk: ${opp.resolution_risk}`);
+  const text = lines.join("\n");
 
   navigator.clipboard.writeText(text).then(() => {
     const btn = document.querySelector(`tr[data-id="${id}"] .copy-btn`);
@@ -514,23 +659,34 @@ function copyOpp(id) {
 
 function updateStats() {
   const opps = state.filteredOpps;
+  const arbOpps = opps.filter(o => (o.type || "arb") === "arb");
+  const evOpps = opps.filter(o => o.type === "ev");
 
   document.getElementById("statOpps").textContent = opps.length;
-  document.getElementById("statOppsSub").textContent = opps.length > 0 ? "active opportunities" : "no opportunities found";
+  const subParts = [];
+  if (arbOpps.length > 0) subParts.push(`${arbOpps.length} arb`);
+  if (evOpps.length > 0) subParts.push(`${evOpps.length} +EV`);
+  document.getElementById("statOppsSub").textContent = subParts.length > 0 ? subParts.join(", ") : "no opportunities found";
 
   if (opps.length > 0) {
-    const best = opps[0];
-    document.getElementById("statBestArb").textContent = formatPct(best.net_arb_pct);
-    document.getElementById("statBestArbSub").textContent = truncate(best.event, 25);
-    document.getElementById("statBestArb").className = `stat-value ${best.net_arb_pct >= 3 ? "green" : best.net_arb_pct >= 1 ? "yellow" : ""}`;
+    // Best edge (arb net% or EV%)
+    const bestEdge = opps.reduce((best, o) => {
+      const edge = o.type === "ev" ? (o.ev_pct || 0) : o.net_arb_pct;
+      return edge > best.edge ? { edge, opp: o } : best;
+    }, { edge: -Infinity, opp: null });
 
-    const avg = opps.reduce((s, o) => s + o.net_arb_pct, 0) / opps.length;
-    document.getElementById("statAvgProfit").textContent = formatPct(avg);
-    document.getElementById("statAvgProfit").className = `stat-value ${avg >= 3 ? "green" : avg >= 1 ? "yellow" : ""}`;
+    const bestLabel = bestEdge.opp.type === "ev" ? `+${formatPct(bestEdge.edge)} EV` : formatPct(bestEdge.edge);
+    document.getElementById("statBestArb").textContent = bestLabel;
+    document.getElementById("statBestArbSub").textContent = truncate(bestEdge.opp.event, 25);
+    document.getElementById("statBestArb").className = `stat-value ${bestEdge.opp.type === "ev" ? "blue" : bestEdge.edge >= 3 ? "green" : bestEdge.edge >= 1 ? "yellow" : ""}`;
+
+    const avgEdge = opps.reduce((s, o) => s + (o.type === "ev" ? (o.ev_pct || 0) : o.net_arb_pct), 0) / opps.length;
+    document.getElementById("statAvgProfit").textContent = formatPct(avgEdge);
+    document.getElementById("statAvgProfit").className = `stat-value ${avgEdge >= 3 ? "green" : avgEdge >= 1 ? "yellow" : ""}`;
 
     // Session stats
     state.sessionCount = Math.max(state.sessionCount, opps.length);
-    state.sessionBest = Math.max(state.sessionBest, best.net_arb_pct);
+    state.sessionBest = Math.max(state.sessionBest, bestEdge.edge);
   } else {
     document.getElementById("statBestArb").textContent = "--%";
     document.getElementById("statBestArbSub").textContent = "--";
@@ -550,7 +706,7 @@ function updateStats() {
   document.getElementById("footerToday").textContent = `${state.sessionCount} opps`;
   document.getElementById("footerBest").textContent = formatPct(state.sessionBest);
   if (opps.length > 0) {
-    const avg = opps.reduce((s, o) => s + o.net_arb_pct, 0) / opps.length;
+    const avg = opps.reduce((s, o) => s + (o.type === "ev" ? (o.ev_pct || 0) : o.net_arb_pct), 0) / opps.length;
     document.getElementById("footerAvg").textContent = formatPct(avg);
   }
 }
@@ -600,7 +756,7 @@ function updateSourceStatus(sources, errors) {
       link.href = "#";
       link.style.cssText = "color:inherit;text-decoration:underline";
       link.textContent = "Settings";
-      link.addEventListener("click", (e) => { e.preventDefault(); document.getElementById("settingsDrawer").classList.add("open"); });
+      link.addEventListener("click", (e) => { e.preventDefault(); openSettings(); });
       banner.appendChild(link);
       banner.appendChild(document.createTextNode("."));
     } else if (sbStatus === "no_key") {
@@ -611,7 +767,7 @@ function updateSourceStatus(sources, errors) {
       link.href = "#";
       link.style.cssText = "color:inherit;text-decoration:underline";
       link.textContent = "Settings";
-      link.addEventListener("click", (e) => { e.preventDefault(); document.getElementById("settingsDrawer").classList.add("open"); });
+      link.addEventListener("click", (e) => { e.preventDefault(); openSettings(); });
       banner.appendChild(link);
       banner.appendChild(document.createTextNode(" to enable sportsbook data."));
     } else {
@@ -763,6 +919,131 @@ function showToast(message) {
   }, 4000);
 }
 
+// ─── Kelly Criterion ──────────────────────────────────────────────────────
+
+function computeKelly(opp) {
+  // f* = (b*p - q) / b
+  // b = net payout ratio (what you win per $1 bet, after fees)
+  // p = fair probability of winning
+  // q = 1 - p
+  const price = opp.platform_a.implied_prob;
+  const fairProb = opp.consensus_prob || 0;
+  const feeRate = (opp.platform_a.fee_pct || 0) / 100;
+
+  if (!price || price <= 0 || price >= 1 || fairProb <= 0) {
+    return { full: 0, half: 0, quarter: 0 };
+  }
+
+  const grossPayout = 1.0 / price;
+  const b = grossPayout - 1.0 - (grossPayout - 1.0) * feeRate; // net profit per $1
+  const p = fairProb;
+  const q = 1.0 - p;
+
+  if (b <= 0) return { full: 0, half: 0, quarter: 0 };
+
+  const fullKelly = Math.max(0, (b * p - q) / b);
+  return {
+    full: fullKelly,
+    half: fullKelly / 2,
+    quarter: fullKelly / 4,
+  };
+}
+
+function renderKellyCards(kelly, bankroll) {
+  bankroll = parseFloat(bankroll) || 100;
+  if (kelly.full <= 0) {
+    return '<div style="color:var(--text-dim);font-size:0.72rem">Edge too small for Kelly sizing</div>';
+  }
+  // Note: all values are computed from trusted internal state (numeric computations),
+  // not from user input or external strings — safe for innerHTML
+  return `
+    <div class="kelly-grid">
+      <div class="kelly-card">
+        <div class="kelly-label">Full Kelly</div>
+        <div class="kelly-value">${(kelly.full * 100).toFixed(1)}%</div>
+        <div class="kelly-amount">${formatMoney(kelly.full * bankroll)}</div>
+      </div>
+      <div class="kelly-card">
+        <div class="kelly-label">Half Kelly</div>
+        <div class="kelly-value">${(kelly.half * 100).toFixed(1)}%</div>
+        <div class="kelly-amount">${formatMoney(kelly.half * bankroll)}</div>
+      </div>
+      <div class="kelly-card">
+        <div class="kelly-label">Quarter Kelly</div>
+        <div class="kelly-value">${(kelly.quarter * 100).toFixed(1)}%</div>
+        <div class="kelly-amount">${formatMoney(kelly.quarter * bankroll)}</div>
+      </div>
+    </div>
+  `;
+}
+
+function recalcKelly(id, bankroll) {
+  const opp = state.filteredOpps.find(o => o.id === id);
+  if (!opp) return;
+  const kelly = computeKelly(opp);
+  const el = document.getElementById(`kelly-${id}`);
+  if (el) {
+    // Values are from trusted internal computations, not user-controlled strings
+    el.innerHTML = renderKellyCards(kelly, bankroll);
+  }
+}
+
+// ─── Mobile Sidebar Toggle ────────────────────────────────────────────────
+
+function openSidebar() {
+  document.getElementById("sidebar").classList.add("open");
+  document.getElementById("sidebarBackdrop").classList.add("open");
+}
+
+function closeSidebar() {
+  document.getElementById("sidebar").classList.remove("open");
+  document.getElementById("sidebarBackdrop").classList.remove("open");
+}
+
+// ─── CSV Export ───────────────────────────────────────────────────────────
+
+function exportCSV() {
+  const opps = state.filteredOpps;
+  if (!opps.length) {
+    showToast("No data to export");
+    return;
+  }
+  const headers = [
+    "Type", "Sport", "Event", "Time", "Platform A", "Side A", "Odds A", "Prob A",
+    "Platform B", "Side B", "Odds B", "Prob B", "Gross %", "Net %", "EV %",
+    "Risk", "Confidence", "Liquidity"
+  ];
+  const rows = opps.map(o => [
+    o.type || "arb",
+    o.sport,
+    `"${(o.event || "").replace(/"/g, '""')}"`,
+    o.time_display || "",
+    o.platform_a.name,
+    `"${(o.platform_a.side || "").replace(/"/g, '""')}"`,
+    formatOdds(o.platform_a.american_odds),
+    o.platform_a.implied_prob ? (o.platform_a.implied_prob * 100).toFixed(1) + "%" : "",
+    o.platform_b.name,
+    `"${(o.platform_b.side || "").replace(/"/g, '""')}"`,
+    formatOdds(o.platform_b.american_odds),
+    o.platform_b.implied_prob ? (o.platform_b.implied_prob * 100).toFixed(1) + "%" : "",
+    o.gross_arb_pct != null ? o.gross_arb_pct.toFixed(2) : "",
+    o.net_arb_pct != null ? o.net_arb_pct.toFixed(2) : "",
+    o.ev_pct != null ? o.ev_pct.toFixed(2) : "",
+    o.resolution_risk || "",
+    o.match_confidence != null ? (o.match_confidence * 100).toFixed(0) + "%" : "",
+    o.liquidity || ""
+  ].join(","));
+  const csv = [headers.join(","), ...rows].join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `arbscanner_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast(`Exported ${opps.length} opportunities`);
+}
+
 // ─── Sound Alert ──────────────────────────────────────────────────────────────
 
 function playChime() {
@@ -827,6 +1108,13 @@ function setupEventListeners() {
   // Refresh button
   document.getElementById("btnRefresh").addEventListener("click", runScan);
 
+  // Mobile sidebar
+  document.getElementById("btnBurger").addEventListener("click", openSidebar);
+  document.getElementById("sidebarBackdrop").addEventListener("click", closeSidebar);
+
+  // CSV export
+  document.getElementById("btnExportCSV").addEventListener("click", exportCSV);
+
   // Auto-scan toggle
   const autoToggle = document.getElementById("toggleAutoScan");
   if (autoToggle) {
@@ -854,7 +1142,10 @@ function setupEventListeners() {
   // Filters
   const filterInputs = document.querySelectorAll(".sidebar input, .sidebar select");
   filterInputs.forEach(input => {
-    input.addEventListener("change", applyFilters);
+    input.addEventListener("change", () => {
+      applyFilters();
+      saveFiltersToStorage();
+    });
   });
 
   // Min profit slider
@@ -862,7 +1153,10 @@ function setupEventListeners() {
   slider.addEventListener("input", () => {
     document.getElementById("minProfitValue").textContent = slider.value + "%";
   });
-  slider.addEventListener("change", applyFilters);
+  slider.addEventListener("change", () => {
+    applyFilters();
+    saveFiltersToStorage();
+  });
 
   // Table header sorting
   document.querySelectorAll("th[data-sort]").forEach(th => {
@@ -895,6 +1189,7 @@ function setupEventListeners() {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       closeSettings();
+      closeSidebar();
       if (state.expandedRow) {
         toggleDetail(state.expandedRow);
       }
@@ -908,6 +1203,7 @@ function setupEventListeners() {
 // ─── Initialize ───────────────────────────────────────────────────────────────
 
 async function init() {
+  restoreFiltersFromStorage();
   setupEventListeners();
 
   // Show cached data instantly (stale-while-revalidate)
