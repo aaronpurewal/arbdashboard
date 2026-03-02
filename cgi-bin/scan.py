@@ -26,8 +26,13 @@ from functools import lru_cache
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(_PROJECT_ROOT, "data.db") if os.access(_PROJECT_ROOT, os.W_OK) else "/tmp/data.db"
-CACHE_TTL = 0  # seconds — no cache for prediction markets (free APIs)
-SPORTSBOOK_CACHE_TTL = 30  # seconds — light cache to avoid duplicate rapid-fire scans
+# Cache TTLs calibrated to each API's actual update frequency / rate limits:
+# - Polymarket: real-time CLOB, 300 req/10s limit — no cache needed
+# - Kalshi: real-time CLOB, but only 20 req/s (Basic tier) — needs light cache
+# - Odds API: server updates every 60s (pre-match) / 40s (in-play) — match their refresh
+POLYMARKET_CACHE_TTL = 0
+KALSHI_CACHE_TTL = 15   # 20 req/s limit is tight with ~15 series per scan
+SPORTSBOOK_CACHE_TTL = 45  # their server only refreshes every 60s anyway
 
 # ─── Database helpers ─────────────────────────────────────────────────────────
 
@@ -56,7 +61,7 @@ def _safe_int(val, default=None):
     except (TypeError, ValueError):
         return default
 
-def get_cached(db, cache_key, ttl=CACHE_TTL):
+def get_cached(db, cache_key, ttl=0):
     row = db.execute("SELECT data, ts FROM cache WHERE cache_key=?", [cache_key]).fetchone()
     if row and (time.time() - row[1]) < ttl:
         return json.loads(row[0])
@@ -527,7 +532,7 @@ def fetch_polymarket_sports(db=None):
     if db is None:
         db = get_db()
     cache_key = "polymarket_sports"
-    cached = get_cached(db, cache_key)
+    cached = get_cached(db, cache_key, ttl=POLYMARKET_CACHE_TTL)
     if cached is not None:
         return cached
 
@@ -733,7 +738,7 @@ def fetch_kalshi_sports(db=None):
     if db is None:
         db = get_db()
     cache_key = "kalshi_sports"
-    cached = get_cached(db, cache_key)
+    cached = get_cached(db, cache_key, ttl=KALSHI_CACHE_TTL)
     if cached is not None:
         return cached
 
@@ -832,7 +837,8 @@ def fetch_sportsbook_odds(db=None, api_key=""):
     api_quota = {"remaining": None, "used": None}  # from response headers
 
     def _fetch_sport(sport, is_prop=False):
-        """Fetch a single sport from The Odds API. Returns (events, headers)."""
+        """Fetch a single sport from The Odds API. Returns (events, headers).
+        Retries once on transient errors (401/403/timeout)."""
         if is_prop:
             markets_param = "player_points,player_rebounds,player_assists,player_threes"
         else:
@@ -840,14 +846,24 @@ def fetch_sportsbook_odds(db=None, api_key=""):
         url = (f"https://api.the-odds-api.com/v4/sports/{sport}/odds?"
                f"apiKey={api_key}&regions=us&markets={markets_param}"
                f"&oddsFormat=american")
-        data, headers = fetch_json_with_headers(url)
-        if isinstance(data, dict) and "_error" in data:
-            err = data["_error"]
-            if "401" in err or "403" in err:
-                raise RuntimeError("INVALID_KEY")
-            if "429" in err or "quota" in err.lower() or "limit" in err.lower():
-                raise RuntimeError("QUOTA_EXCEEDED")
-            raise RuntimeError(err)
+
+        for attempt in range(2):  # 1 retry on transient errors
+            data, headers = fetch_json_with_headers(url)
+            if isinstance(data, dict) and "_error" in data:
+                err = data["_error"]
+                if "429" in err or "quota" in err.lower() or "limit" in err.lower():
+                    raise RuntimeError("QUOTA_EXCEEDED")
+                if ("401" in err or "403" in err) and attempt == 0:
+                    time.sleep(0.5)  # retry once — often transient
+                    continue
+                if "401" in err or "403" in err:
+                    raise RuntimeError("INVALID_KEY")
+                if attempt == 0:
+                    time.sleep(0.3)
+                    continue
+                raise RuntimeError(err)
+            break
+
         events = []
         if isinstance(data, list):
             for event in data:
@@ -1146,8 +1162,8 @@ def find_all_arb_opportunities(prediction_markets, sportsbook_entries, min_net_p
         if yes_price <= 0 or yes_price >= 1:
             continue
 
-        # Skip very illiquid markets — wide bid-ask spreads create phantom arbs
-        if yes_price + no_price < 0.80:
+        # Skip illiquid markets — wide bid-ask spreads create phantom arbs
+        if yes_price + no_price < 0.90:
             continue
 
         is_kalshi = source != "polymarket"
@@ -1450,7 +1466,7 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
 
         if len(pm_prices) < 2:
             continue
-        if pm_prices[0] + pm_prices[1] < 0.80:
+        if pm_prices[0] + pm_prices[1] < 0.90:
             continue  # illiquid — wide bid-ask creates phantom arbs
 
         # Narrow Kalshi candidates by team overlap
@@ -1471,7 +1487,7 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
 
             if len(km_prices) < 2:
                 continue
-            if km_prices[0] + km_prices[1] < 0.80:
+            if km_prices[0] + km_prices[1] < 0.90:
                 continue  # illiquid — wide bid-ask creates phantom arbs
 
             # Date check — same teams can play on different dates
@@ -2027,7 +2043,7 @@ def find_ev_opportunities(prediction_markets, sportsbook_entries, fair_index, mi
         no_price = prices[1]
         if yes_price <= 0 or yes_price >= 1:
             continue
-        if yes_price + no_price < 0.80:
+        if yes_price + no_price < 0.90:
             continue  # illiquid
 
         is_kalshi = source != "polymarket"
