@@ -1067,7 +1067,7 @@ def find_all_arb_opportunities(prediction_markets, sportsbook_entries, min_net_p
             if pred_line is not None:
                 candidates = [c for c in candidates
                               if c.get("outcome_point") is not None
-                              and abs(abs(c["outcome_point"]) - abs(pred_line)) < 1.0]
+                              and abs(c["outcome_point"] - pred_line) < 0.01]
             else:
                 # No point line extractable — too ambiguous to match reliably
                 continue
@@ -1333,7 +1333,7 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
             if pm_subtype == "totals" and km_subtype == "totals":
                 pm_line = _extract_point_line(pm.get("question", ""))
                 km_line = _extract_point_line(km.get("question", ""))
-                if pm_line is not None and km_line is not None and abs(pm_line - km_line) >= 1.0:
+                if pm_line is not None and km_line is not None and abs(pm_line - km_line) >= 0.01:
                     continue
 
             # For game winner markets, require both teams to match
