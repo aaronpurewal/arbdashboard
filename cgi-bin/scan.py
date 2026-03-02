@@ -1124,6 +1124,8 @@ def find_all_arb_opportunities(prediction_markets, sportsbook_entries, min_net_p
 
             if arb is None or arb["gross_arb_pct"] <= 0:
                 continue
+            if arb["gross_arb_pct"] > 15:
+                continue  # >15% gross is certainly stale/non-executable pricing
             if arb["net_arb_pct"] < min_net_pct:
                 continue
 
@@ -1171,7 +1173,11 @@ def find_all_arb_opportunities(prediction_markets, sportsbook_entries, min_net_p
             # Resolution risk
             resolution_risk = "low"
             risk_note = ""
-            if confidence < 0.6:
+            gross_pct = arb["gross_arb_pct"]
+            if gross_pct > 10:
+                resolution_risk = "high"
+                risk_note = "Likely stale pricing — arb this large (>10%) usually means one side has outdated odds"
+            elif confidence < 0.6:
                 resolution_risk = "high"
                 risk_note = "Low match confidence — verify markets reference the same event and conditions"
             elif confidence < 0.8:
@@ -1349,6 +1355,8 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
 
             if arb is None or arb["gross_arb_pct"] <= 0:
                 continue
+            if arb["gross_arb_pct"] > 15:
+                continue  # >15% gross is certainly stale/non-executable pricing
             if arb["net_arb_pct"] < min_net_pct:
                 continue
 
@@ -1387,8 +1395,10 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
                 "net_arb_pct": arb["net_arb_pct"],
                 "stakes": stakes,
                 "match_confidence": round(score, 2),
-                "resolution_risk": "medium" if score < 0.6 else "low",
-                "risk_note": "Cross-platform prediction market arb — verify both markets resolve on the same criteria",
+                "resolution_risk": "high" if arb["gross_arb_pct"] > 10 else ("medium" if score < 0.6 else "low"),
+                "risk_note": ("Likely stale pricing — arb this large (>10%) usually means one side has outdated odds"
+                              if arb["gross_arb_pct"] > 10
+                              else "Cross-platform prediction market arb — verify both markets resolve on the same criteria"),
                 "is_prop": False,
                 "liquidity": pm.get("liquidity", 0),
                 "volume": pm.get("volume", 0),
