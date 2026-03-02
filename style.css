@@ -1808,6 +1808,37 @@ tr.tier-ev .step-link:hover {
   color: #66ccff;
 }
 
+/* EV Reference Label (table row — "SHARP LINE" under Platform B) */
+.ref-label {
+  font-family: var(--font-mono);
+  font-size: 0.5rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  margin-top: 3px;
+  opacity: 0.7;
+}
+
+/* EV Reference Explainer (detail panel — why Platform B is shown) */
+.ref-explainer {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: rgba(77, 166, 255, 0.06);
+  border: 1px solid rgba(77, 166, 255, 0.15);
+  font-size: 0.66rem;
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+.ref-explainer strong {
+  color: var(--text-primary);
+}
+.ref-explainer em {
+  color: var(--yellow);
+  font-style: normal;
+  font-weight: 600;
+}
+
 /* EV Warning Box */
 .ev-warning {
   margin-top: 14px;

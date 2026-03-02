@@ -448,9 +448,11 @@ function renderTable() {
         <td><span class="platform-name ${platformClass(opp.platform_a.name)}">${escapeHtml(opp.platform_a.name)}</span></td>
         <td>${escapeHtml(opp.platform_a.side)}</td>
         <td class="odds-cell">${oddsA}</td>
-        <td><span class="platform-name ${platformClass(opp.platform_b.name)}">${escapeHtml(opp.platform_b.name)}</span></td>
-        <td>${escapeHtml(opp.platform_b.side)}</td>
-        <td class="odds-cell">${oddsB}</td>
+        <td>${isEV
+          ? `<span class="platform-name ${platformClass(opp.platform_b.name)}" style="opacity:0.6">${escapeHtml(opp.platform_b.name)}</span><div class="ref-label">SHARP LINE</div>`
+          : `<span class="platform-name ${platformClass(opp.platform_b.name)}">${escapeHtml(opp.platform_b.name)}</span>`}</td>
+        <td${isEV ? ' style="opacity:0.5"' : ''}>${escapeHtml(opp.platform_b.side)}</td>
+        <td class="odds-cell"${isEV ? ' style="opacity:0.5"' : ''}>${oddsB}</td>
         <td class="${edgeClass}" ${edgeColor}>${edgeLabel}</td>
         <td>
           <div class="tooltip-wrapper">
@@ -629,8 +631,12 @@ function renderEVDetail(opp) {
           <tr><td>Platform fee</td><td>${opp.platform_a.fee_pct.toFixed(1)}%</td></tr>
           <tr><td>Your edge</td><td style="color:var(--blue);font-weight:800">+${formatPct(opp.ev_pct)}</td></tr>
         </table>
-        <div style="margin-top:12px;font-size:0.65rem;color:var(--text-dim);line-height:1.6">
-          Fair value is derived from sharp sportsbook lines (Pinnacle, etc.) with the vig removed.
+        <div class="ref-explainer">
+          <strong>Why is ${escapeHtml(opp.platform_b.name)} shown?</strong>
+          ${escapeHtml(opp.platform_b.name)} is <em>not</em> a bet you place — it's the reference sportsbook whose odds were used to estimate the true fair probability.
+          The fair value (${formatProb(opp.consensus_prob)}) is derived from sharp sportsbook lines with the bookmaker's margin (vig) removed. You only bet on <strong>${escapeHtml(opp.platform_a.name)}</strong>.
+        </div>
+        <div style="margin-top:8px;font-size:0.65rem;color:var(--text-dim);line-height:1.6">
           A +${formatPct(opp.ev_pct)} edge means for every $100 wagered, you expect ~$${(opp.ev_pct).toFixed(0)} profit on average.
         </div>
       </div>
