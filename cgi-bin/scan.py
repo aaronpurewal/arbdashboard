@@ -27,7 +27,7 @@ from functools import lru_cache
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(_PROJECT_ROOT, "data.db") if os.access(_PROJECT_ROOT, os.W_OK) else "/tmp/data.db"
 CACHE_TTL = 60  # seconds — prediction markets (Poly/Kalshi)
-SPORTSBOOK_CACHE_TTL = 300  # seconds — sportsbook odds (saves API credits)
+SPORTSBOOK_CACHE_TTL = 120  # seconds — sportsbook odds (balances freshness vs API credits)
 
 # ─── Database helpers ─────────────────────────────────────────────────────────
 
@@ -49,6 +49,12 @@ def get_db():
 def get_config(db, key, default=None):
     row = db.execute("SELECT value FROM config WHERE key=?", [key]).fetchone()
     return row[0] if row else default
+
+def _safe_int(val, default=None):
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return default
 
 def get_cached(db, cache_key, ttl=CACHE_TTL):
     row = db.execute("SELECT data, ts FROM cache WHERE cache_key=?", [cache_key]).fetchone()
@@ -87,6 +93,22 @@ def fetch_json(url, timeout=12):
             return json.loads(raw)
     except Exception as e:
         return {"_error": str(e)}
+
+def fetch_json_with_headers(url, timeout=12):
+    """Like fetch_json but also returns response headers (for API quota tracking)."""
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "ArbScanner/1.0",
+            "Accept": "application/json"
+        })
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            headers = dict(resp.headers)
+            raw = resp.read().decode("utf-8")
+            return json.loads(raw), headers
+    except urllib.error.HTTPError as e:
+        return {"_error": f"HTTP {e.code}: {e.reason}"}, {}
+    except Exception as e:
+        return {"_error": str(e)}, {}
 
 # ─── Odds conversion utilities ───────────────────────────────────────────────
 
@@ -806,11 +828,11 @@ def fetch_sportsbook_odds(db=None, api_key=""):
     # No bookmakers filter — the API returns ALL available bookmakers at no
     # extra credit cost.  More books = better consensus for the +EV engine.
     all_events = []
-
     api_errors = []
+    api_quota = {"remaining": None, "used": None}  # from response headers
 
     def _fetch_sport(sport, is_prop=False):
-        """Fetch a single sport from The Odds API. Thread-safe (no shared state)."""
+        """Fetch a single sport from The Odds API. Returns (events, headers)."""
         if is_prop:
             markets_param = "player_points,player_rebounds,player_assists,player_threes"
         else:
@@ -818,7 +840,7 @@ def fetch_sportsbook_odds(db=None, api_key=""):
         url = (f"https://api.the-odds-api.com/v4/sports/{sport}/odds?"
                f"apiKey={api_key}&regions=us&markets={markets_param}"
                f"&oddsFormat=american")
-        data = fetch_json(url)
+        data, headers = fetch_json_with_headers(url)
         if isinstance(data, dict) and "_error" in data:
             err = data["_error"]
             if "401" in err or "403" in err:
@@ -833,18 +855,27 @@ def fetch_sportsbook_odds(db=None, api_key=""):
                 if is_prop:
                     event["_is_prop"] = True
                 events.append(event)
-        return events
+        return events, headers
 
-    # Fire all 8 requests in parallel (7 sports + 1 NBA props)
+    # Stagger requests: 3 workers max to avoid per-second rate limits.
+    # Even on higher tiers, 8 simultaneous hits can trigger throttling.
     fetch_tasks = [(sport, False) for sport in sports_to_fetch]
     fetch_tasks.append(("basketball_nba", True))  # NBA player props
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=3) as pool:
         futures = [pool.submit(_fetch_sport, sport, is_prop)
                    for sport, is_prop in fetch_tasks]
         for future in as_completed(futures):
             try:
-                all_events.extend(future.result(timeout=12))
+                events, headers = future.result(timeout=12)
+                all_events.extend(events)
+                # Track API quota from response headers
+                remaining = headers.get("x-requests-remaining") or headers.get("X-Requests-Remaining")
+                used = headers.get("x-requests-used") or headers.get("X-Requests-Used")
+                if remaining is not None:
+                    api_quota["remaining"] = int(remaining)
+                if used is not None:
+                    api_quota["used"] = int(used)
             except RuntimeError as e:
                 api_errors.append(str(e))
             except Exception:
@@ -911,6 +942,14 @@ def fetch_sportsbook_odds(db=None, api_key=""):
                         results.append(entry)
         except Exception:
             continue
+
+    # Save API quota info for frontend display
+    if api_quota["remaining"] is not None or api_quota["used"] is not None:
+        db.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
+                   ["_odds_api_remaining", str(api_quota["remaining"] or 0)])
+        db.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
+                   ["_odds_api_used", str(api_quota["used"] or 0)])
+        db.commit()
 
     set_cached(db, cache_key, results)
     return results
@@ -2897,6 +2936,8 @@ def run_scan(params):
             "poly_count": len(poly_markets),
             "kalshi_count": len(kalshi_markets),
             "sportsbook_count": len(sportsbook_entries),
+            "odds_api_remaining": _safe_int(get_config(db, "_odds_api_remaining")),
+            "odds_api_used": _safe_int(get_config(db, "_odds_api_used")),
         }
     }
 

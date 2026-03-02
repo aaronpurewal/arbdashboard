@@ -925,6 +925,15 @@ function updateStats() {
     const avg = opps.reduce((s, o) => s + (o.type === "ev" ? (o.ev_pct || 0) : o.net_arb_pct), 0) / opps.length;
     document.getElementById("footerAvg").textContent = formatPct(avg);
   }
+
+  // API quota display
+  const remaining = state.meta?.odds_api_remaining;
+  const used = state.meta?.odds_api_used;
+  const quotaEl = document.getElementById("footerApiQuota");
+  if (quotaEl && remaining != null) {
+    quotaEl.textContent = `${remaining.toLocaleString()} left`;
+    quotaEl.style.color = remaining < 100 ? "var(--red)" : remaining < 500 ? "var(--yellow)" : "";
+  }
 }
 
 function updateSourceStatus(sources, errors) {
