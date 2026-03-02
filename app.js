@@ -1026,8 +1026,7 @@ async function runScan() {
     const sbStatus = data.meta?.sources?.sportsbook;
     const sbFailed = sbStatus === "quota_exceeded" || sbStatus === "error" || sbStatus === "invalid_key";
     if (newOpps.length === 0 && state.opportunities.length > 0 && sbFailed) {
-      // Keep existing opportunities, just update status indicators
-      showToast("Sportsbook API issue — showing cached results");
+      // Keep existing opportunities silently
       updateSourceStatus(data.meta?.sources, data.meta?.errors);
       return;
     }
@@ -1110,7 +1109,7 @@ function getScanMode() {
 function getRefreshInterval() {
   const mode = getScanMode();
   if (mode === "prime") return 30;                          // 30s during prime time
-  if (mode === "extended") return state.config.refresh_interval || 60;  // user setting
+  if (mode === "extended") return state.config.refresh_interval || 45;  // user setting
   return 0;                                                 // no auto-refresh
 }
 
