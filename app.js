@@ -1012,11 +1012,11 @@ async function runScan() {
   try {
     const data = await fetchScan();
 
-    // If scan returned empty due to quota/error but we have existing opps, keep them
+    // If scan returned empty due to API error but we have existing opps, keep them
     const newOpps = data.opportunities || [];
     const sbStatus = data.meta?.sources?.sportsbook;
-    if (newOpps.length === 0 && state.opportunities.length > 0 &&
-        (sbStatus === "quota_exceeded" || sbStatus === "error")) {
+    const sbFailed = sbStatus === "quota_exceeded" || sbStatus === "error" || sbStatus === "invalid_key";
+    if (newOpps.length === 0 && state.opportunities.length > 0 && sbFailed) {
       // Keep existing opportunities, just update status indicators
       showToast("Sportsbook API issue — showing cached results");
       updateSourceStatus(data.meta?.sources, data.meta?.errors);

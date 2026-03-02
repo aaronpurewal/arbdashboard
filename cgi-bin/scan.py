@@ -852,12 +852,13 @@ def fetch_sportsbook_odds(db=None, api_key=""):
 
     # If all requests failed, try stale cache before giving up
     if not all_events and api_errors:
-        if any(e == "INVALID_KEY" for e in api_errors):
-            raise RuntimeError("INVALID_KEY: Odds API key is invalid or expired. Update it in Settings.")
-        # For quota/rate limit errors, return stale cached data if available
+        # Always try stale cache first — even for "invalid key" which can be transient
         stale = get_stale_cached(db, cache_key)
         if stale is not None:
             return stale
+        # No stale cache — propagate the error
+        if any(e == "INVALID_KEY" for e in api_errors):
+            raise RuntimeError("INVALID_KEY: Odds API key is invalid or expired. Update it in Settings.")
         if any(e == "QUOTA_EXCEEDED" for e in api_errors):
             raise RuntimeError("QUOTA_EXCEEDED: Odds API usage limit reached. Check your plan at https://the-odds-api.com")
 
