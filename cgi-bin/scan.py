@@ -1123,7 +1123,17 @@ def find_all_arb_opportunities(prediction_markets, sportsbook_entries, min_net_p
                 pred_side_raw = "Yes"
                 pred_price = yes_price
 
-            sb_side = sb.get("outcome_name", "")
+            # Build descriptive sportsbook side label
+            sb_outcome = sb.get("outcome_name", "")
+            sb_point = sb.get("outcome_point")
+            if sb_point is not None and sb_outcome.lower() in ("over", "under"):
+                sb_side = f"{sb_outcome} {sb_point}"
+            elif sb_point is not None and sb_outcome.lower() not in ("over", "under"):
+                # Spreads: team name + point line (e.g., "Thunder -5.5")
+                sign = "+" if sb_point > 0 else ""
+                sb_side = f"{sb_outcome} {sign}{sb_point}"
+            else:
+                sb_side = sb_outcome
 
             # Translate Yes/No into meaningful labels
             pred_line = pred.get("_floor_strike")
