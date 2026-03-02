@@ -4,6 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ARBSCANNER — Prediction Market Arbitrage Monitor</title>
+
+  <!-- Fonts: preconnect + load via link for non-blocking render -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
+
   <link rel="stylesheet" href="./style.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
 </head>
@@ -189,9 +195,20 @@
             </table>
 
             <div class="empty-state" id="emptyState" style="display: none;">
-              <div class="icon">⚡</div>
-              <div class="title">No arbitrage opportunities found</div>
-              <div class="subtitle">Adjust your filters or wait for the next scan. Markets are constantly moving.</div>
+              <div class="empty-state-inner">
+                <div class="icon">
+                  <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <circle cx="24" cy="24" r="20" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.3"/>
+                    <path d="M24 14v10l7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0.5"/>
+                    <circle cx="24" cy="24" r="3" fill="currentColor" opacity="0.4"/>
+                  </svg>
+                </div>
+                <div class="title">No arbitrage opportunities found</div>
+                <div class="subtitle">Markets are constantly moving. Adjust your filters or wait for the next scan — opportunities appear and disappear in seconds.</div>
+                <div class="empty-hint">
+                  <span>TIP: Expand your filters or lower the minimum profit threshold</span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -217,7 +234,7 @@
   <div class="modal-overlay" id="settingsModal">
     <div class="modal">
       <div class="modal-header">
-        <h2>⚙ Configuration</h2>
+        <h2>Configuration</h2>
         <button class="modal-close" id="modalClose">&times;</button>
       </div>
       <div class="modal-body">
