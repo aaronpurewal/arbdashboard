@@ -1089,6 +1089,7 @@ tr.tier-ev:hover td {
    ══════════════════════════════════════════════════════════════════════════ */
 .detail-panel { display: none; }
 .detail-panel td {
+  white-space: normal;   /* override global td nowrap — detail panels need wrapping */
   overflow: hidden;
   max-width: 0;          /* forces td to respect table width instead of expanding */
   word-wrap: break-word;
@@ -1110,9 +1111,13 @@ tr.tier-ev:hover td {
   background: rgba(8, 14, 28, 0.6);
   backdrop-filter: var(--glass-blur);
   border-bottom: 2px solid rgba(0, 255, 136, 0.1);
+  white-space: normal;
   overflow: hidden;
   word-wrap: break-word;
   overflow-wrap: break-word;
+}
+.detail-content * {
+  white-space: normal;
 }
 
 .detail-grid {
