@@ -26,8 +26,8 @@ from functools import lru_cache
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(_PROJECT_ROOT, "data.db") if os.access(_PROJECT_ROOT, os.W_OK) else "/tmp/data.db"
-CACHE_TTL = 60  # seconds — prediction markets (Poly/Kalshi)
-SPORTSBOOK_CACHE_TTL = 120  # seconds — sportsbook odds (balances freshness vs API credits)
+CACHE_TTL = 0  # seconds — no cache for prediction markets (free APIs)
+SPORTSBOOK_CACHE_TTL = 30  # seconds — light cache to avoid duplicate rapid-fire scans
 
 # ─── Database helpers ─────────────────────────────────────────────────────────
 
@@ -1146,8 +1146,8 @@ def find_all_arb_opportunities(prediction_markets, sportsbook_entries, min_net_p
         if yes_price <= 0 or yes_price >= 1:
             continue
 
-        # Skip illiquid markets — wide bid-ask spreads create phantom arbs
-        if yes_price + no_price < 0.90:
+        # Skip very illiquid markets — wide bid-ask spreads create phantom arbs
+        if yes_price + no_price < 0.80:
             continue
 
         is_kalshi = source != "polymarket"
@@ -1450,7 +1450,7 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
 
         if len(pm_prices) < 2:
             continue
-        if pm_prices[0] + pm_prices[1] < 0.90:
+        if pm_prices[0] + pm_prices[1] < 0.80:
             continue  # illiquid — wide bid-ask creates phantom arbs
 
         # Narrow Kalshi candidates by team overlap
@@ -1471,7 +1471,7 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
 
             if len(km_prices) < 2:
                 continue
-            if km_prices[0] + km_prices[1] < 0.90:
+            if km_prices[0] + km_prices[1] < 0.80:
                 continue  # illiquid — wide bid-ask creates phantom arbs
 
             # Date check — same teams can play on different dates
@@ -1999,7 +1999,7 @@ def compute_ev(price, fair_prob, fee_rate=0.0):
     return ev * 100
 
 
-def find_ev_opportunities(prediction_markets, sportsbook_entries, fair_index, min_ev_pct=2.0):
+def find_ev_opportunities(prediction_markets, sportsbook_entries, fair_index, min_ev_pct=1.0):
     """
     Find +EV opportunities where prediction market prices beat fair odds.
     Reuses the existing matching engine to pair prediction markets with sportsbook events.
@@ -2027,7 +2027,7 @@ def find_ev_opportunities(prediction_markets, sportsbook_entries, fair_index, mi
         no_price = prices[1]
         if yes_price <= 0 or yes_price >= 1:
             continue
-        if yes_price + no_price < 0.90:
+        if yes_price + no_price < 0.80:
             continue  # illiquid
 
         is_kalshi = source != "polymarket"
@@ -2056,8 +2056,9 @@ def find_ev_opportunities(prediction_markets, sportsbook_entries, fair_index, mi
             continue
         candidates = [c for c in candidates if c.get("market_type") in allowed_sb_types]
 
-        if pred_subtype == "h2h" and pred.get("_sport_category") == "soccer":
-            continue
+        # Note: soccer h2h is 3-way (home/draw/away) but EV detection still works
+        # because Kalshi's "Will X win?" maps to a single sportsbook outcome.
+        # Only arb detection needs the 3-way skip (can't cover 3 sides with 2 bets).
 
         # For totals/spreads, require matching point line
         if pred_subtype in ("totals", "spreads", "player_props"):
@@ -2321,7 +2322,7 @@ def find_ev_opportunities(prediction_markets, sportsbook_entries, fair_index, mi
     return sorted(seen.values(), key=lambda x: x['ev_pct'], reverse=True)
 
 
-def find_cross_sportsbook_opportunities(sportsbook_entries, fair_index, min_ev_pct=2.0):
+def find_cross_sportsbook_opportunities(sportsbook_entries, fair_index, min_ev_pct=1.0):
     """
     Find cross-sportsbook arbs and +EV bets.
     Groups sportsbook entries by event, finds best prices on opposing sides.
