@@ -1676,6 +1676,130 @@ tr.new-row-enter:nth-child(25) { animation-delay: 0.48s; }
   .btn { padding: 7px 12px; font-size: 0.64rem; }
 }
 
+/* ── Detail Panel: Explainers & Action Steps ─────────────────────────────── */
+.detail-explainer {
+  padding: 14px 18px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  border-left: 3px solid;
+}
+.arb-explainer {
+  background: rgba(0, 255, 136, 0.06);
+  border-color: var(--green);
+}
+.ev-explainer {
+  background: rgba(0, 163, 255, 0.06);
+  border-color: var(--blue);
+}
+.explainer-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.arb-explainer .explainer-label { color: var(--green); }
+.ev-explainer .explainer-label  { color: var(--blue); }
+.explainer-text {
+  font-size: 0.78rem;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+.explainer-text strong {
+  color: var(--text-primary);
+}
+
+/* Action Steps */
+.action-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 10px;
+}
+.action-step {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.step-num {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+  font-weight: 700;
+  margin-top: 1px;
+}
+/* Arb context: green step numbers */
+.arb-explainer ~ .detail-grid .step-num,
+tr:not(.tier-ev) .step-num {
+  background: rgba(0, 255, 136, 0.12);
+  color: var(--green);
+  border: 1px solid rgba(0, 255, 136, 0.2);
+}
+/* EV context: blue step numbers */
+.ev-explainer ~ .detail-grid .step-num,
+tr.tier-ev .step-num {
+  background: rgba(0, 163, 255, 0.12);
+  color: var(--blue);
+  border: 1px solid rgba(0, 163, 255, 0.2);
+}
+.step-body {
+  flex: 1;
+  min-width: 0;
+}
+.step-title {
+  font-size: 0.76rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+.step-detail {
+  font-size: 0.66rem;
+  color: var(--text-dim);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+.step-link {
+  display: inline-block;
+  margin-top: 5px;
+  font-size: 0.66rem;
+  font-weight: 600;
+  color: var(--green);
+  text-decoration: none;
+  transition: color 0.15s;
+}
+.step-link:hover {
+  color: var(--text-bright);
+  text-decoration: underline;
+}
+.ev-explainer ~ .detail-grid .step-link,
+tr.tier-ev .step-link {
+  color: var(--blue);
+}
+.ev-explainer ~ .detail-grid .step-link:hover,
+tr.tier-ev .step-link:hover {
+  color: #66ccff;
+}
+
+/* EV Warning Box */
+.ev-warning {
+  margin-top: 14px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: rgba(255, 167, 38, 0.08);
+  border: 1px solid rgba(255, 167, 38, 0.2);
+  color: var(--yellow);
+  font-size: 0.66rem;
+  font-weight: 500;
+  line-height: 1.6;
+}
+
 /* ── Selection ───────────────────────────────────────────────────────────── */
 ::selection { background: rgba(0, 255, 136, 0.2); color: var(--text-bright); }
 

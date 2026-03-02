@@ -501,16 +501,50 @@ function renderStakes(opp, bankroll) {
 }
 
 function renderArbDetail(opp) {
+  const bankroll = state.config.default_bankroll || 100;
+  const stakeA = (bankroll * opp.platform_a.implied_prob).toFixed(2);
+  const stakeB = (bankroll * opp.platform_b.implied_prob).toFixed(2);
   return `
+    <div class="detail-explainer arb-explainer">
+      <div class="explainer-label">GUARANTEED ARBITRAGE</div>
+      <div class="explainer-text">
+        Bet both sides across two platforms. No matter who wins, you profit <strong style="color:var(--green)">${formatPct(opp.net_arb_pct)}</strong> after fees.
+      </div>
+    </div>
     <div class="detail-grid">
       <div class="detail-section">
-        <h4>Stake Calculator</h4>
-        <div class="stake-input-row">
+        <h4>What To Do</h4>
+        <div class="action-steps">
+          <div class="action-step">
+            <span class="step-num">1</span>
+            <div class="step-body">
+              <div class="step-title">Bet <strong style="color:var(--green)">${formatMoney(stakeA)}</strong> on ${escapeHtml(opp.platform_a.name)}</div>
+              <div class="step-detail">${escapeHtml(opp.platform_a.side)} @ ${formatProb(opp.platform_a.implied_prob)} (${formatOdds(opp.platform_a.american_odds)})</div>
+              ${opp.platform_a.url ? `<a class="step-link" href="${opp.platform_a.url}" target="_blank" rel="noopener noreferrer">Open ${escapeHtml(opp.platform_a.name)} &rarr;</a>` : ""}
+            </div>
+          </div>
+          <div class="action-step">
+            <span class="step-num">2</span>
+            <div class="step-body">
+              <div class="step-title">Bet <strong style="color:var(--green)">${formatMoney(stakeB)}</strong> on ${escapeHtml(opp.platform_b.name)}</div>
+              <div class="step-detail">${escapeHtml(opp.platform_b.side)} @ ${formatProb(opp.platform_b.implied_prob)} (${formatOdds(opp.platform_b.american_odds)})</div>
+              ${opp.platform_b.url ? `<a class="step-link" href="${opp.platform_b.url}" target="_blank" rel="noopener noreferrer">Open ${escapeHtml(opp.platform_b.name)} &rarr;</a>` : ""}
+            </div>
+          </div>
+          <div class="action-step">
+            <span class="step-num">3</span>
+            <div class="step-body">
+              <div class="step-title">Collect <strong style="color:var(--green)">${formatMoney(bankroll - parseFloat(stakeA) - parseFloat(stakeB))}</strong> guaranteed profit</div>
+              <div class="step-detail">Total staked: ${formatMoney(parseFloat(stakeA) + parseFloat(stakeB))} &rarr; Payout: ${formatMoney(bankroll)} (either outcome)</div>
+            </div>
+          </div>
+        </div>
+        <div class="stake-input-row" style="margin-top:14px">
           <label>Bankroll: $</label>
-          <input type="number" value="${state.config.default_bankroll || 100}" min="1" onchange="recalcStakes('${opp.id}', this.value)">
+          <input type="number" value="${bankroll}" min="1" onchange="recalcStakes('${opp.id}', this.value)">
         </div>
         <div class="stake-result" id="stakes-${opp.id}">
-          ${renderStakes(opp, state.config.default_bankroll || 100)}
+          ${renderStakes(opp, bankroll)}
         </div>
       </div>
       <div class="detail-section">
@@ -528,16 +562,14 @@ function renderArbDetail(opp) {
         </div>
       </div>
       <div class="detail-section">
-        <h4>Market Details</h4>
-        <div style="font-size:0.72rem;color:var(--text-secondary);line-height:1.6">
-          <div><strong>Event:</strong> ${escapeHtml(opp.event_detail || opp.event)}</div>
-          <div><strong>Type:</strong> ${escapeHtml(opp.market_type)}</div>
-          <div><strong>Status:</strong> ${opp.is_live ? '<span style="color:var(--red)">LIVE</span>' : 'Pre-match'}</div>
-          ${opp.commence_time ? `<div><strong>Start:</strong> ${new Date(opp.commence_time).toLocaleString()}</div>` : ""}
-        </div>
-        <div class="detail-links">
-          ${opp.platform_a.url ? `<a href="${opp.platform_a.url}" target="_blank" rel="noopener noreferrer">${escapeHtml(opp.platform_a.name)} →</a>` : ""}
-          ${opp.platform_b.url ? `<a href="${opp.platform_b.url}" target="_blank" rel="noopener noreferrer">${escapeHtml(opp.platform_b.name)} →</a>` : ""}
+        <h4>How Arbs Work</h4>
+        <div style="font-size:0.72rem;color:var(--text-secondary);line-height:1.8">
+          <p>Two platforms disagree on the odds. By betting <strong>both sides</strong>, you lock in a profit no matter what happens.</p>
+          <p style="margin-top:8px;color:var(--text-dim)">
+            <strong>Event:</strong> ${escapeHtml(opp.event_detail || opp.event)}<br>
+            <strong>Type:</strong> ${escapeHtml(opp.market_type)}<br>
+            ${opp.commence_time ? `<strong>Start:</strong> ${new Date(opp.commence_time).toLocaleString()}` : ""}
+          </p>
         </div>
       </div>
     </div>
@@ -547,10 +579,63 @@ function renderArbDetail(opp) {
 function renderEVDetail(opp) {
   const bankroll = state.config.default_bankroll || 100;
   const kelly = computeKelly(opp);
+  const suggestedStake = kelly.half > 0 ? formatMoney(kelly.half * bankroll) : formatMoney(bankroll * 0.05);
+  const suggestedPct = kelly.half > 0 ? (kelly.half * 100).toFixed(1) + "%" : "5%";
   return `
+    <div class="detail-explainer ev-explainer">
+      <div class="explainer-label">POSITIVE EXPECTED VALUE</div>
+      <div class="explainer-text">
+        The price on <strong>${escapeHtml(opp.platform_a.name)}</strong> is cheaper than the true fair probability.
+        You're paying <strong>${formatProb(opp.platform_a.implied_prob)}</strong> for something worth <strong style="color:var(--blue)">${formatProb(opp.consensus_prob)}</strong>.
+        This is <strong>not a guaranteed profit</strong> — you can lose any single bet — but repeating +EV bets is profitable long-term.
+      </div>
+    </div>
     <div class="detail-grid">
       <div class="detail-section">
-        <h4>Kelly Criterion Sizing</h4>
+        <h4>What To Do</h4>
+        <div class="action-steps">
+          <div class="action-step">
+            <span class="step-num">1</span>
+            <div class="step-body">
+              <div class="step-title">Go to <strong>${escapeHtml(opp.platform_a.name)}</strong></div>
+              <div class="step-detail">Find: ${escapeHtml(opp.event_detail || opp.event)}</div>
+              ${opp.platform_a.url ? `<a class="step-link" href="${opp.platform_a.url}" target="_blank" rel="noopener noreferrer">Open ${escapeHtml(opp.platform_a.name)} &rarr;</a>` : ""}
+            </div>
+          </div>
+          <div class="action-step">
+            <span class="step-num">2</span>
+            <div class="step-body">
+              <div class="step-title">Buy <strong style="color:var(--blue)">${escapeHtml(opp.platform_a.side)}</strong></div>
+              <div class="step-detail">At ${formatProb(opp.platform_a.implied_prob)} or better (${formatOdds(opp.platform_a.american_odds)} American)</div>
+            </div>
+          </div>
+          <div class="action-step">
+            <span class="step-num">3</span>
+            <div class="step-body">
+              <div class="step-title">Stake <strong style="color:var(--blue)">${suggestedStake}</strong> (${suggestedPct} of bankroll)</div>
+              <div class="step-detail">Half Kelly — balances growth with risk. Adjust bankroll below.</div>
+            </div>
+          </div>
+        </div>
+        <div class="ev-warning">
+          Not guaranteed — you can lose this bet. The edge means you profit over many bets, not every bet.
+        </div>
+      </div>
+      <div class="detail-section">
+        <h4>Why This Has Edge</h4>
+        <table class="fee-table">
+          <tr><td>You pay (cost)</td><td style="color:var(--text-primary)">${formatProb(opp.platform_a.implied_prob)}</td></tr>
+          <tr><td>True fair value</td><td style="color:var(--blue)">${formatProb(opp.consensus_prob)}</td></tr>
+          <tr><td>Platform fee</td><td>${opp.platform_a.fee_pct.toFixed(1)}%</td></tr>
+          <tr><td>Your edge</td><td style="color:var(--blue);font-weight:800">+${formatPct(opp.ev_pct)}</td></tr>
+        </table>
+        <div style="margin-top:12px;font-size:0.65rem;color:var(--text-dim);line-height:1.6">
+          Fair value is derived from sharp sportsbook lines (Pinnacle, etc.) with the vig removed.
+          A +${formatPct(opp.ev_pct)} edge means for every $100 wagered, you expect ~$${(opp.ev_pct).toFixed(0)} profit on average.
+        </div>
+      </div>
+      <div class="detail-section">
+        <h4>Kelly Sizing</h4>
         <div class="stake-input-row">
           <label>Bankroll: $</label>
           <input type="number" value="${bankroll}" min="1" onchange="recalcKelly('${opp.id}', this.value)">
@@ -558,32 +643,10 @@ function renderEVDetail(opp) {
         <div id="kelly-${opp.id}">
           ${renderKellyCards(kelly, bankroll)}
         </div>
-      </div>
-      <div class="detail-section">
-        <h4>Edge Analysis</h4>
-        <table class="fee-table">
-          <tr><td>Your price (cost)</td><td style="color:var(--text-primary)">${formatProb(opp.platform_a.implied_prob)}</td></tr>
-          <tr><td>Consensus fair prob</td><td style="color:var(--blue)">${formatProb(opp.consensus_prob)}</td></tr>
-          <tr><td>Fee</td><td>${opp.platform_a.fee_pct.toFixed(1)}%</td></tr>
-          <tr><td>Expected value</td><td style="color:var(--blue);font-weight:800">+${formatPct(opp.ev_pct)}</td></tr>
-        </table>
-        <div style="margin-top:10px;font-size:0.65rem;color:var(--text-dim)">
-          <strong>Match confidence:</strong> ${(opp.match_confidence * 100).toFixed(0)}%<br>
-          <strong>Liquidity:</strong> ${formatLiquidity(opp.liquidity)}<br>
-          <strong>Volume:</strong> ${formatLiquidity(opp.volume)}
-        </div>
-      </div>
-      <div class="detail-section">
-        <h4>Market Details</h4>
-        <div style="font-size:0.72rem;color:var(--text-secondary);line-height:1.6">
-          <div><strong>Event:</strong> ${escapeHtml(opp.event_detail || opp.event)}</div>
-          <div><strong>Bet:</strong> ${escapeHtml(opp.platform_a.name)} — ${escapeHtml(opp.platform_a.side)}</div>
-          <div><strong>Type:</strong> ${escapeHtml(opp.market_type)}</div>
-          <div><strong>Status:</strong> ${opp.is_live ? '<span style="color:var(--red)">LIVE</span>' : 'Pre-match'}</div>
-          ${opp.commence_time ? `<div><strong>Start:</strong> ${new Date(opp.commence_time).toLocaleString()}</div>` : ""}
-        </div>
-        <div class="detail-links">
-          ${opp.platform_a.url ? `<a href="${opp.platform_a.url}" target="_blank" rel="noopener noreferrer">${escapeHtml(opp.platform_a.name)} →</a>` : ""}
+        <div style="margin-top:10px;font-size:0.62rem;color:var(--text-dim);line-height:1.6">
+          <strong>Full Kelly</strong> = max growth, high variance.<br>
+          <strong>Half Kelly</strong> = recommended — 75% of the growth, half the swings.<br>
+          <strong>Quarter Kelly</strong> = conservative — use when uncertain about the edge.
         </div>
       </div>
     </div>
