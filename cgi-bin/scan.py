@@ -1106,8 +1106,27 @@ def find_all_arb_opportunities(prediction_markets, sportsbook_entries, min_net_p
                     diff_yes = abs(yes_price - sb_prob)
                     diff_no = abs(no_price - sb_prob)
                     sb_same_as_yes = (diff_yes <= diff_no)
+            elif pred_subtype == "h2h":
+                # For h2h, use team name matching instead of price proximity.
+                # Price proximity fails near 50/50 and creates phantom arbs
+                # where both legs bet the same outcome.
+                # _no_sub_title = the team this Kalshi sub-market is about (= YES team)
+                yes_team_label = pred.get("_no_sub_title", "").strip()
+                sb_outcome_name = sb.get("outcome_name", "").strip()
+                if yes_team_label and sb_outcome_name:
+                    yes_tokens = set(normalize_name(yes_team_label).split())
+                    sb_tokens = set(normalize_name(sb_outcome_name).split())
+                    overlap = yes_tokens & sb_tokens
+                    # Remove generic tokens that could cause false matches
+                    overlap -= {"fc", "city", "united", "the", "de", "la"}
+                    sb_same_as_yes = len(overlap) > 0
+                else:
+                    # No team label — fall back to price proximity
+                    diff_yes = abs(yes_price - sb_prob)
+                    diff_no = abs(no_price - sb_prob)
+                    sb_same_as_yes = (diff_yes <= diff_no)
             else:
-                # h2h and spreads: price proximity heuristic
+                # spreads and other types: price proximity heuristic
                 diff_yes = abs(yes_price - sb_prob)
                 diff_no = abs(no_price - sb_prob)
                 sb_same_as_yes = (diff_yes <= diff_no)
