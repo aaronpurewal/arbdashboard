@@ -936,12 +936,30 @@ function updateStats() {
   }
 }
 
+// Track consecutive sportsbook failures — only alarm user for persistent issues
+let _sbFailCount = 0;
+const _SB_FAIL_THRESHOLD = 3;  // show banner after 3 consecutive failures
+
 function updateSourceStatus(sources, errors) {
   if (!sources) return;
+
+  const sbStatus = sources.sportsbook;
+  const sbOk = sbStatus === "ok" || sbStatus === "ok_no_arbs" || sbStatus === "empty";
+
+  // Track consecutive failures — transient errors shouldn't alarm the user
+  if (sbOk) {
+    _sbFailCount = 0;
+  } else if (sbStatus && sbStatus !== "no_key") {
+    _sbFailCount++;
+  }
+
+  // Status dots: show green when OK or recovering (< threshold), red only for persistent issues
   const statusMap = {
-    ok: "ok", empty: "stale", error: "error", no_key: "no_key",
-    pending: "pending", ok_no_arbs: "ok",
-    quota_exceeded: "error", invalid_key: "error",
+    ok: "ok", empty: "stale", pending: "pending", ok_no_arbs: "ok", no_key: "no_key",
+    // Transient errors show as OK (system is recovering silently)
+    error: _sbFailCount >= _SB_FAIL_THRESHOLD ? "error" : "ok",
+    quota_exceeded: _sbFailCount >= _SB_FAIL_THRESHOLD ? "error" : "ok",
+    invalid_key: _sbFailCount >= _SB_FAIL_THRESHOLD ? "error" : "ok",
   };
 
   for (const [key, status] of Object.entries(sources)) {
@@ -952,56 +970,43 @@ function updateSourceStatus(sources, errors) {
     dot.classList.add(statusMap[status] || "error");
   }
 
-  // Show API key warning banner if needed
+  // Banner: only show for persistent issues or missing key (always actionable)
   const banner = document.getElementById("demoBanner");
-  const sbStatus = sources.sportsbook;
-  if (sbStatus === "quota_exceeded" || sbStatus === "invalid_key" || sbStatus === "no_key" ||
-      (sbStatus === "error" && errors && errors.length)) {
+
+  if (sbStatus === "no_key") {
+    // Always show — user needs to add key
     banner.textContent = "";
     banner.className = "demo-banner warning";
-    const icon = document.createTextNode("\u26A0 ");
-    banner.appendChild(icon);
+    banner.appendChild(document.createTextNode("\u26A0 "));
     const strong = document.createElement("strong");
-    if (sbStatus === "quota_exceeded") {
-      strong.textContent = "Odds API quota exceeded";
-      banner.appendChild(strong);
-      banner.appendChild(document.createTextNode(" \u2014 usage limit reached. "));
-      const link = document.createElement("a");
-      link.href = "https://the-odds-api.com";
-      link.target = "_blank";
-      link.style.cssText = "color:inherit;text-decoration:underline";
-      link.textContent = "Check your plan";
-      banner.appendChild(link);
-      banner.appendChild(document.createTextNode(" or wait for it to reset."));
-    } else if (sbStatus === "invalid_key") {
-      strong.textContent = "Odds API key invalid";
-      banner.appendChild(strong);
-      banner.appendChild(document.createTextNode(" \u2014 update your key in "));
-      const link = document.createElement("a");
-      link.href = "#";
-      link.style.cssText = "color:inherit;text-decoration:underline";
-      link.textContent = "Settings";
-      link.addEventListener("click", (e) => { e.preventDefault(); openSettings(); });
-      banner.appendChild(link);
-      banner.appendChild(document.createTextNode("."));
-    } else if (sbStatus === "no_key") {
-      strong.textContent = "No Odds API key";
-      banner.appendChild(strong);
-      banner.appendChild(document.createTextNode(" \u2014 add your key in "));
-      const link = document.createElement("a");
-      link.href = "#";
-      link.style.cssText = "color:inherit;text-decoration:underline";
-      link.textContent = "Settings";
-      link.addEventListener("click", (e) => { e.preventDefault(); openSettings(); });
-      banner.appendChild(link);
-      banner.appendChild(document.createTextNode(" to enable sportsbook data."));
-    } else {
-      strong.textContent = "Sportsbook error";
-      banner.appendChild(strong);
-      const errMsg = (errors || []).find(e => e.startsWith("Sportsbook:")) || (errors || [])[0] || "Unknown error";
-      banner.appendChild(document.createTextNode(" \u2014 " + errMsg));
-    }
+    strong.textContent = "No Odds API key";
+    banner.appendChild(strong);
+    banner.appendChild(document.createTextNode(" \u2014 add your key in "));
+    const link = document.createElement("a");
+    link.href = "#";
+    link.style.cssText = "color:inherit;text-decoration:underline";
+    link.textContent = "Settings";
+    link.addEventListener("click", (e) => { e.preventDefault(); openSettings(); });
+    banner.appendChild(link);
+    banner.appendChild(document.createTextNode(" to enable sportsbook data."));
+  } else if (sbStatus === "quota_exceeded" && _sbFailCount >= _SB_FAIL_THRESHOLD) {
+    // Persistent quota issue — user might need to upgrade
+    banner.textContent = "";
+    banner.className = "demo-banner warning";
+    banner.appendChild(document.createTextNode("\u26A0 "));
+    const strong = document.createElement("strong");
+    strong.textContent = "Odds API quota exceeded";
+    banner.appendChild(strong);
+    banner.appendChild(document.createTextNode(" \u2014 usage limit reached. "));
+    const link = document.createElement("a");
+    link.href = "https://the-odds-api.com";
+    link.target = "_blank";
+    link.style.cssText = "color:inherit;text-decoration:underline";
+    link.textContent = "Check your plan";
+    banner.appendChild(link);
+    banner.appendChild(document.createTextNode(" or wait for it to reset."));
   } else {
+    // Everything else (ok, transient errors recovering, etc.) — hide banner
     banner.className = "demo-banner hidden";
   }
 }
