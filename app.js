@@ -29,7 +29,16 @@ const state = {
   previousIds: new Set(),
   sessionBest: 0,
   sessionCount: 0,
+  _scanCycle: 0,           // tracks quick/full scan alternation
 };
+
+// Quick scan runs every QUICK_SCAN_INTERVAL seconds, fetching only
+// prediction market prices against cached sportsbook data.
+// Every FULL_SCAN_EVERY-th cycle triggers a full scan that refreshes
+// sportsbook odds too.  This gives ~10s arb detection latency
+// while only hitting the Odds API every ~40s.
+const QUICK_SCAN_INTERVAL = 10;
+const FULL_SCAN_EVERY = 4;  // full scan every 4th cycle (~40s)
 
 // ─── Utility Functions ────────────────────────────────────────────────────────
 
@@ -59,6 +68,17 @@ function formatLiquidity(val) {
   if (val >= 1000000) return "$" + (val / 1000000).toFixed(1) + "M";
   if (val >= 1000) return "$" + (val / 1000).toFixed(0) + "K";
   return "$" + val.toFixed(0);
+}
+
+function formatOddsAge(isoStr) {
+  if (!isoStr) return null;
+  try {
+    const age = (Date.now() - new Date(isoStr).getTime()) / 1000;
+    if (age < 0) return null;
+    if (age < 60) return { text: `${Math.round(age)}s ago`, stale: false };
+    if (age < 3600) return { text: `${Math.round(age / 60)}m ago`, stale: age > 300 };
+    return { text: `${Math.round(age / 3600)}h ago`, stale: true };
+  } catch { return null; }
 }
 
 function platformClass(name) {
@@ -130,11 +150,12 @@ function escapeHtml(s) {
 
 // ─── API Calls ────────────────────────────────────────────────────────────────
 
-async function fetchScan() {
+async function fetchScan(mode = "full") {
   const params = new URLSearchParams();
   if (state.config.odds_api_key) params.set("api_key", state.config.odds_api_key);
   const minPct = parseFloat(document.getElementById("minProfitSlider").value) || 0;
   if (minPct > 0) params.set("min_pct", minPct.toString());
+  if (mode === "quick") params.set("mode", "quick");
 
   const url = `${API_BASE}/scan?${params.toString()}`;
   const resp = await fetch(url);
@@ -771,8 +792,8 @@ function renderEVDetail(opp) {
       <div class="detail-section">
         <h4>Why This Has Edge</h4>
         <table class="fee-table">
-          <tr><td>You pay (cost)</td><td style="color:var(--text-primary)">${formatProb(opp.platform_a.implied_prob)}</td></tr>
-          <tr><td>True fair value</td><td style="color:var(--blue)">${formatProb(opp.consensus_prob)}</td></tr>
+          <tr><td>You pay (cost)</td><td style="color:var(--text-primary)">${(opp.platform_a.implied_prob * 100).toFixed(2)}%</td></tr>
+          <tr><td>True fair value</td><td style="color:var(--blue)">${(opp.consensus_prob * 100).toFixed(2)}%</td></tr>
           <tr><td>Platform fee</td><td>${opp.platform_a.fee_pct.toFixed(1)}%</td></tr>
           <tr><td>Your edge</td><td style="color:var(--blue);font-weight:800">+${formatPct(opp.ev_pct)}</td></tr>
         </table>
@@ -783,9 +804,34 @@ function renderEVDetail(opp) {
           The fair value (${formatProb(opp.consensus_prob)}) is derived from ${opp.n_books ? opp.n_books + ' sharp sportsbook lines' : 'sharp sportsbook lines'} with the bookmaker's margin (${opp.overround ? ((opp.overround - 1) * 100).toFixed(1) + '% vig' : 'vig'}) removed.
           You only bet on <strong>${escapeHtml(opp.platform_a.name)}</strong>.
         </div>
+        ${(() => {
+          const age = formatOddsAge(opp.sb_last_update);
+          if (!age) return '';
+          return `<div class="odds-freshness ${age.stale ? 'stale' : 'fresh'}">
+            <span class="freshness-dot"></span>
+            Sportsbook odds updated <strong>${age.text}</strong>${age.stale ? ' — edge may be based on stale line' : ''}
+          </div>`;
+        })()}
         <div style="margin-top:8px;font-size:0.65rem;color:var(--text-dim);line-height:1.6">
-          A +${formatPct(opp.ev_pct)} edge means for every $100 wagered, you expect ~$${(opp.ev_pct).toFixed(0)} profit on average.
+          A +${formatPct(opp.ev_pct)} edge means for every $100 wagered, you expect ~$${(opp.ev_pct).toFixed(2)} profit on average.
         </div>
+        <details class="ev-formula-details">
+          <summary>How is +${formatPct(opp.ev_pct)} calculated?</summary>
+          <div class="ev-formula-body">
+            <p>Edge is <strong>return on investment</strong>, not just the probability gap.</p>
+            <div class="ev-formula-block">
+              <span class="formula-label">Formula</span>
+              Edge&nbsp;=&nbsp;(&thinsp;fair&thinsp;÷&thinsp;cost&thinsp;−&thinsp;1&thinsp;)&thinsp;×&thinsp;100
+            </div>
+            <div class="ev-formula-block">
+              <span class="formula-label">Your numbers</span>
+              Edge&nbsp;=&nbsp;(&thinsp;${(opp.consensus_prob * 100).toFixed(2)}%&thinsp;÷&thinsp;${(opp.platform_a.implied_prob * 100).toFixed(2)}%&thinsp;−&thinsp;1&thinsp;)&thinsp;×&thinsp;100&nbsp;=&nbsp;<strong style="color:var(--blue)">+${formatPct(opp.ev_pct)}</strong>
+            </div>
+            <p style="margin-top:8px">Why not just fair&thinsp;−&thinsp;cost? Because buying at <strong>${(opp.platform_a.implied_prob * 100).toFixed(1)}%</strong> means your payout is <strong>${(1 / opp.platform_a.implied_prob).toFixed(2)}×</strong> your stake. A small probability gap gets multiplied by a large payout — so even ${((opp.consensus_prob - opp.platform_a.implied_prob) * 100).toFixed(2)} percentage points of mispricing creates a ${formatPct(opp.ev_pct)} return on investment.</p>
+            ${opp.platform_a.fee_pct > 0 ? `<p style="margin-top:4px">The ${opp.platform_a.fee_pct.toFixed(1)}% platform fee is also factored in, slightly reducing the effective payout.</p>` : ''}
+            <p style="margin-top:6px"><a href="./learn.html#ev-calc" style="color:var(--blue);text-decoration:none;font-weight:500">Full explanation with examples →</a></p>
+          </div>
+        </details>
       </div>
       <div class="detail-section">
         <h4>Kelly Sizing</h4>
@@ -1013,18 +1059,29 @@ function updateSourceStatus(sources, errors) {
 
 // ─── Scan Execution ───────────────────────────────────────────────────────────
 
-async function runScan() {
+async function runScan(forceMode) {
   if (state.isLoading) return;
   state.isLoading = true;
 
+  // Determine scan mode: manual clicks always do full, auto-scans alternate
+  state._scanCycle++;
+  const mode = forceMode || (state._scanCycle % FULL_SCAN_EVERY === 0 ? "full" : "quick");
+  const isQuick = mode === "quick";
+
   const overlay = document.getElementById("loadingOverlay");
   const btn = document.getElementById("btnRefresh");
-  overlay.classList.add("active");
-  btn.disabled = true;
-  btn.textContent = "⟳ SCANNING...";
+
+  if (!isQuick) {
+    overlay.classList.add("active");
+    btn.disabled = true;
+    btn.textContent = "⟳ SCANNING...";
+  } else {
+    // Quick scan: subtle indicator — pulse the scan button
+    btn.classList.add("quick-pulse");
+  }
 
   try {
-    const data = await fetchScan();
+    const data = await fetchScan(mode);
 
     // If scan returned empty due to API error but we have existing opps, keep them
     const newOpps = data.opportunities || [];
@@ -1039,7 +1096,7 @@ async function runScan() {
     state.opportunities = newOpps;
     state.meta = data.meta || {};
 
-    // Update source status
+    // Update source status (don't flash sportsbook dot for quick scans)
     updateSourceStatus(data.meta?.sources, data.meta?.errors);
 
     // Check for new high-value opportunities
@@ -1064,19 +1121,23 @@ async function runScan() {
 
     applyFilters();
 
-    // Cache for instant display on next visit
-    try { localStorage.setItem("arbscanner_last_scan", JSON.stringify(data)); } catch (e) { /* quota */ }
+    // Cache for instant display on next visit (only on full scans to avoid thrashing)
+    if (!isQuick) {
+      try { localStorage.setItem("arbscanner_last_scan", JSON.stringify(data)); } catch (e) { /* quota */ }
+    }
 
   } catch (err) {
     console.error("Scan error:", err);
-    showToast("Scan failed: " + err.message);
-    // Set all statuses to error
-    document.getElementById("statusPolymarket").className = "status-dot error";
-    document.getElementById("statusKalshi").className = "status-dot error";
-    document.getElementById("statusSportsbook").className = "status-dot error";
+    if (!isQuick) {
+      showToast("Scan failed: " + err.message);
+      document.getElementById("statusPolymarket").className = "status-dot error";
+      document.getElementById("statusKalshi").className = "status-dot error";
+      document.getElementById("statusSportsbook").className = "status-dot error";
+    }
   } finally {
     state.isLoading = false;
     overlay.classList.remove("active");
+    btn.classList.remove("quick-pulse");
     btn.disabled = false;
     btn.textContent = "↻ SCAN";
     resetCountdown();
@@ -1086,7 +1147,9 @@ async function runScan() {
 // ─── Countdown & Auto-Refresh ─────────────────────────────────────────────────
 
 function resetCountdown() {
-  state.countdownSeconds = getRefreshInterval() || (state.config.refresh_interval || 60);
+  // Quick scans run at QUICK_SCAN_INTERVAL; fall back to full interval if auto-scan is off
+  const fullInterval = getRefreshInterval();
+  state.countdownSeconds = fullInterval ? QUICK_SCAN_INTERVAL : 0;
   updateCountdownDisplay();
 }
 
@@ -1132,13 +1195,10 @@ function startAutoRefresh() {
       document.getElementById("countdown").textContent = "off-hours";
       return;
     }
-    // Sync interval to current mode (prime=30s, extended=configured)
-    const target = getRefreshInterval();
-    if (state.countdownSeconds > target) state.countdownSeconds = target;
 
     state.countdownSeconds--;
     if (state.countdownSeconds <= 0) {
-      runScan();
+      runScan();  // mode (quick vs full) is determined inside runScan
     }
     updateCountdownDisplay();
   }, 1000);
@@ -1347,14 +1407,14 @@ async function handleSaveSettings() {
   showToast("Configuration saved");
 
   // Re-scan with new config
-  runScan();
+  runScan("full");
 }
 
 // ─── Event Listeners ──────────────────────────────────────────────────────────
 
 function setupEventListeners() {
   // Refresh button
-  document.getElementById("btnRefresh").addEventListener("click", runScan);
+  document.getElementById("btnRefresh").addEventListener("click", () => runScan("full"));
 
   // Mobile sidebar
   document.getElementById("btnBurger").addEventListener("click", openSidebar);
@@ -1443,7 +1503,7 @@ function setupEventListeners() {
       }
     }
     if (e.key === "r" && !e.ctrlKey && !e.metaKey && document.activeElement.tagName !== "INPUT") {
-      runScan();
+      runScan("full");
     }
   });
 }
@@ -1468,7 +1528,7 @@ async function init() {
 
   // Fire config + scan in parallel (scan reads API key from env on backend)
   const configPromise = loadConfig();
-  const scanPromise = runScan();
+  const scanPromise = runScan("full");
   await configPromise;
 
   resetCountdown();

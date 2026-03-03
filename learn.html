@@ -35,6 +35,7 @@
         <a href="#ev">+EV Betting</a>
         <a href="#vig">The Vig</a>
         <a href="#devig">Power Devigging</a>
+        <a href="#ev-calc">Calculating Edge</a>
         <a href="#kelly">Kelly Criterion</a>
         <a href="#winprob">Win Probability</a>
         <a href="#comparison">Arbs vs +EV</a>
@@ -236,10 +237,150 @@
         </section>
 
         <!-- ══════════════════════════════════════════════════════════════════ -->
-        <!-- SECTION 5: KELLY                                                  -->
+        <!-- SECTION 5: CALCULATING EDGE (EV)                                  -->
+        <!-- ══════════════════════════════════════════════════════════════════ -->
+        <section class="learn-section" id="ev-calc">
+          <h2>Section 5</h2>
+          <h3>How Edge (EV%) Is Calculated</h3>
+
+          <p>You've seen the scanner show edges like "+4.2% EV" or "+1.9% EV." But where does that number come from? It's <strong>not</strong> just the gap between the fair probability and the price you pay.</p>
+
+          <p>Edge is <strong>return on investment (ROI)</strong>. It answers: "For every dollar I risk, how much do I expect to profit?"</p>
+
+          <div class="learn-example">
+            <div class="learn-example-label">The formula</div>
+
+            <div style="padding: 16px 20px; background: var(--bg-secondary); border-radius: 8px; text-align: center; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; color: var(--text-primary); margin-bottom: 16px; letter-spacing: 0.02em;">
+              Edge % = ( fair_value ÷ cost − 1 ) × 100
+            </div>
+
+            <p style="font-size: 0.78rem; color: var(--text-secondary); line-height: 1.7; margin-bottom: 0;">
+              Where <strong>cost</strong> = the price you pay (implied probability from the platform's odds) and <strong>fair_value</strong> = the true probability after removing the bookmaker's vig from sharp lines.
+            </p>
+          </div>
+
+          <h4 style="margin-top: 28px;">Why not just fair − cost?</h4>
+
+          <p>Imagine two bets that are both mispriced by 1 percentage point:</p>
+
+          <div class="learn-example">
+            <div class="learn-example-label">Same probability gap, very different edges</div>
+
+            <div class="learn-comparison">
+              <div class="learn-comparison-side side-a">
+                <div class="side-label">Bet A (Favorite)</div>
+                <div class="side-value">Cost 70% · Fair 71%</div>
+                <div class="side-detail">Gap: 1pp</div>
+              </div>
+              <div class="learn-comparison-side side-b">
+                <div class="side-label">Bet B (Longshot)</div>
+                <div class="side-value">Cost 10% · Fair 11%</div>
+                <div class="side-detail">Gap: 1pp</div>
+              </div>
+            </div>
+
+            <div class="learn-outcome">
+              <span class="outcome-label">Bet A edge:</span>
+              <span class="outcome-value">(71% ÷ 70% − 1) × 100 = <strong>+1.43%</strong></span>
+            </div>
+            <div class="learn-outcome">
+              <span class="outcome-label">Bet B edge:</span>
+              <span class="outcome-value">(11% ÷ 10% − 1) × 100 = <strong>+10.0%</strong></span>
+            </div>
+          </div>
+
+          <p>Same 1 percentage point gap, but Bet B has <strong>7× the edge</strong>. Why? Because buying at 10% means you're getting a <strong>10:1 payout</strong>. That 1pp of mispricing gets amplified by the large payout multiplier. Buying at 70% means a much smaller 1.43:1 payout, so the same gap creates a smaller return on investment.</p>
+
+          <p>This is why the formula divides rather than subtracts. The <strong>ratio</strong> of fair value to cost captures the payout amplification effect.</p>
+
+          <div class="learn-example">
+            <div class="learn-example-label">Worked example from the scanner</div>
+
+            <p style="font-size: 0.78rem; color: var(--text-secondary); line-height: 1.7; margin-bottom: 14px;">
+              You find a bet priced at <strong>18.20%</strong> on Polymarket, and the true fair probability (from devigged sportsbook lines) is <strong>18.53%</strong>.
+            </p>
+
+            <table class="comparison-table">
+              <thead>
+                <tr>
+                  <th>Step</th>
+                  <th>Value</th>
+                  <th>What it means</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Cost (what you pay)</td>
+                  <td>18.20%</td>
+                  <td>Buy $0.182 shares that pay $1 if you win</td>
+                </tr>
+                <tr>
+                  <td>Fair value</td>
+                  <td>18.53%</td>
+                  <td>You win 18.53% of the time</td>
+                </tr>
+                <tr>
+                  <td>Payout if you win</td>
+                  <td>$5.49</td>
+                  <td>1 ÷ 0.182 = $5.49 per $1 risked</td>
+                </tr>
+                <tr>
+                  <td>Expected return</td>
+                  <td>$1.0182</td>
+                  <td>0.1853 × $5.49 = $1.0182 per $1 risked</td>
+                </tr>
+                <tr>
+                  <td class="val-blue">Edge</td>
+                  <td class="val-blue">+1.82%</td>
+                  <td class="val-blue">(18.53% ÷ 18.20% − 1) × 100</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <p style="font-size: 0.72rem; color: var(--text-dim); line-height: 1.7; margin-top: 12px; margin-bottom: 0;">
+              The probability gap is only 0.33 percentage points, but the edge is +1.82% — because the $5.49× payout multiplier amplifies that small gap.
+            </p>
+          </div>
+
+          <h4 style="margin-top: 28px;">What about platform fees?</h4>
+
+          <p>Some platforms charge a fee on winning trades. The scanner factors this in by reducing the effective payout before computing edge:</p>
+
+          <div class="learn-example" style="padding: 16px 20px;">
+            <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; color: var(--text-secondary); line-height: 2;">
+              <span style="color: var(--text-dim);">1.</span> Payout = 1 ÷ cost<br>
+              <span style="color: var(--text-dim);">2.</span> Effective payout = payout − (payout − 1) × fee%<br>
+              <span style="color: var(--text-dim);">3.</span> Edge = (effective_payout × fair_value − 1) × 100
+            </div>
+          </div>
+
+          <p>For example, Polymarket charges a 2% fee on profits. If your payout is $5.49 and you wagered $1, your profit would be $4.49 — and the fee is 2% of $4.49 = $0.09. Your effective payout drops from $5.49 to $5.40, and the edge drops accordingly.</p>
+
+          <div class="learn-callout callout-blue">
+            <strong>Why this is the standard:</strong> This EV formula is used universally in sports betting, finance, and prediction markets because it's the definition of expected return on capital. It accounts for the payout structure (how much you win relative to what you risk), not just the probability gap. Two bets with the same probability gap can have vastly different edges depending on the odds.
+          </div>
+
+          <details class="learn-collapsible">
+            <summary>The full formula (with fees)</summary>
+            <div class="collapsible-body">
+              <p>Given a market price <code>p</code> (implied probability), a fair probability <code>f</code>, and a platform fee rate <code>r</code>:</p>
+              <p><code>payout = 1 / p</code></p>
+              <p><code>effective_payout = payout − (payout − 1) × r</code></p>
+              <p><code>EV% = (effective_payout × f − 1) × 100</code></p>
+              <p>When <code>r = 0</code> (no fees), this simplifies to:</p>
+              <p><code>EV% = (f / p − 1) × 100</code></p>
+              <p>This is mathematically equivalent to:</p>
+              <p><code>EV% = (expected_return − cost) / cost × 100</code></p>
+              <p>Which is the standard ROI formula applied to a probabilistic wager.</p>
+            </div>
+          </details>
+        </section>
+
+        <!-- ══════════════════════════════════════════════════════════════════ -->
+        <!-- SECTION 6: KELLY                                                  -->
         <!-- ══════════════════════════════════════════════════════════════════ -->
         <section class="learn-section" id="kelly">
-          <h2>Section 5</h2>
+          <h2>Section 6</h2>
           <h3>How We Rank +EV Bets (Kelly Criterion)</h3>
 
           <p>Not all +EV bets are equal. A <strong>+26% EV longshot</strong> that wins 10% of the time sounds amazing, but in practice you'll face long, brutal losing streaks. A <strong>+5% EV favorite</strong> that wins 65% of the time will grow your bankroll more steadily.</p>
@@ -291,10 +432,10 @@
         </section>
 
         <!-- ══════════════════════════════════════════════════════════════════ -->
-        <!-- SECTION 6: WIN PROBABILITY                                        -->
+        <!-- SECTION 7: WIN PROBABILITY                                        -->
         <!-- ══════════════════════════════════════════════════════════════════ -->
         <section class="learn-section" id="winprob">
-          <h2>Section 6</h2>
+          <h2>Section 7</h2>
           <h3>What the Win Probability Means</h3>
 
           <p>Every +EV bet in the scanner shows a <strong>win probability</strong> derived from the devigged sharp line. The color coding tells you at a glance what kind of bet you're looking at:</p>
@@ -317,10 +458,10 @@
         </section>
 
         <!-- ══════════════════════════════════════════════════════════════════ -->
-        <!-- SECTION 7: ARBS vs +EV                                            -->
+        <!-- SECTION 8: ARBS vs +EV                                            -->
         <!-- ══════════════════════════════════════════════════════════════════ -->
         <section class="learn-section" id="comparison">
-          <h2>Section 7</h2>
+          <h2>Section 8</h2>
           <h3>Arbs vs +EV: When to Use Which</h3>
 
           <table class="comparison-table">

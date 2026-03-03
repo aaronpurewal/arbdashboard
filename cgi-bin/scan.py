@@ -922,9 +922,12 @@ def fetch_sportsbook_odds(db=None, api_key=""):
             for bookmaker in event.get("bookmakers", []):
                 bk_name = bookmaker.get("key", "")
                 bk_title = bookmaker.get("title", "")
+                bk_last_update = bookmaker.get("last_update", "")
 
                 for market in bookmaker.get("markets", []):
                     market_key = market.get("key", "")
+                    # Market-level last_update is more granular than bookmaker-level
+                    mkt_last_update = market.get("last_update", "") or bk_last_update
 
                     for outcome in market.get("outcomes", []):
                         price = outcome.get("price", 0)
@@ -954,6 +957,7 @@ def fetch_sportsbook_odds(db=None, api_key=""):
                             "_tokens": set(normalize_name(away + " " + home + " " + name).split()),
                             "_sport_category": SPORT_KEY_TO_CATEGORY.get(sport_key, "other"),
                             "event_name": f"{away} @ {home}",
+                            "last_update": mkt_last_update,
                         }
                         results.append(entry)
         except Exception:
@@ -1657,6 +1661,29 @@ BOOK_SHARPNESS = {
 }
 DEFAULT_BOOK_WEIGHT = 0.35
 
+# Staleness decay: odds older than this (in seconds) get heavily downweighted.
+# Full weight within 2 min, linear decay to 10% at 10 min, 10% floor after.
+STALENESS_FULL_WEIGHT_SECS = 120     # 2 min — full weight
+STALENESS_FLOOR_SECS = 600           # 10 min — minimum weight
+STALENESS_FLOOR_WEIGHT = 0.10        # floor: 10% of base weight
+
+def _staleness_factor(last_update_str, now):
+    """Return a 0.1–1.0 factor based on how old the odds are."""
+    if not last_update_str:
+        return 0.5  # unknown age — half weight
+    try:
+        lu = datetime.fromisoformat(last_update_str.replace("Z", "+00:00"))
+        age = (now - lu).total_seconds()
+    except (ValueError, TypeError):
+        return 0.5
+    if age <= STALENESS_FULL_WEIGHT_SECS:
+        return 1.0
+    if age >= STALENESS_FLOOR_SECS:
+        return STALENESS_FLOOR_WEIGHT
+    # Linear decay between full and floor
+    frac = (age - STALENESS_FULL_WEIGHT_SECS) / (STALENESS_FLOOR_SECS - STALENESS_FULL_WEIGHT_SECS)
+    return 1.0 - frac * (1.0 - STALENESS_FLOOR_WEIGHT)
+
 
 def _power_devig(probs):
     """
@@ -1761,8 +1788,12 @@ def build_fair_odds_index(sportsbook_entries, devig_method="power"):
 
     # Group: (event_key, mtype) → { bookmaker → { outcome_key → implied_prob } }
     market_groups = defaultdict(lambda: defaultdict(lambda: {}))
+    # Track last_update per (market_key, bookmaker) for staleness weighting
+    book_last_update = {}
     # Also track which outcomes exist per market
     market_outcomes = defaultdict(set)
+
+    now = datetime.now(timezone.utc)
 
     for sb in sportsbook_entries:
         home = sb.get("home_team", "")
@@ -1782,6 +1813,13 @@ def build_fair_odds_index(sportsbook_entries, devig_method="power"):
 
         market_groups[market_key][bk][outcome_key] = prob
         market_outcomes[market_key].add(outcome_key)
+
+        # Track the most recent last_update for this (market, book)
+        lu = sb.get("last_update", "")
+        if lu:
+            lu_key = (market_key, bk)
+            if lu_key not in book_last_update:
+                book_last_update[lu_key] = lu
 
     fair_index = {}
 
@@ -1822,7 +1860,12 @@ def build_fair_odds_index(sportsbook_entries, devig_method="power"):
                 fp = bdata["fair"].get(ok, 0)
                 if fp <= 0:
                     continue
-                w = BOOK_SHARPNESS.get(bk, DEFAULT_BOOK_WEIGHT)
+                base_w = BOOK_SHARPNESS.get(bk, DEFAULT_BOOK_WEIGHT)
+                # Downweight stale odds — if a book hasn't updated in 10 min,
+                # its weight drops to 10% of base.
+                lu_str = book_last_update.get((market_key, bk), "")
+                sf = _staleness_factor(lu_str, now)
+                w = base_w * sf
                 weighted_sum += w * fp
                 weight_sum += w
                 values.append(fp)
@@ -2285,8 +2328,8 @@ def find_ev_opportunities(prediction_markets, sportsbook_entries, fair_index, mi
             "platform_a": {
                 "name": source.capitalize(),
                 "side": pred_side,
-                "price": round(pred_price, 4),
-                "implied_prob": round(pred_price, 4),
+                "price": round(pred_price, 6),
+                "implied_prob": round(pred_price, 6),
                 "american_odds": implied_prob_to_american(pred_price),
                 "fee_pct": round(pred_fee * 100, 2),
                 "url": pred.get("url", ""),
@@ -2296,7 +2339,7 @@ def find_ev_opportunities(prediction_markets, sportsbook_entries, fair_index, mi
                 "name": sb.get("bookmaker_title", sb.get("bookmaker", "")),
                 "side": sb_side + " (ref)",
                 "price": sb.get("american_odds", 0),
-                "implied_prob": round(sb_prob, 4),
+                "implied_prob": round(sb_prob, 6),
                 "american_odds": sb.get("american_odds", 0),
                 "fee_pct": 0,
                 "url": "",
@@ -2312,7 +2355,7 @@ def find_ev_opportunities(prediction_markets, sportsbook_entries, fair_index, mi
             "edge_quality_score": eqs_data.get("eqs", 0),
             "growth_rate": eqs_data.get("growth_rate", 0),
             "bets_to_double": eqs_data.get("bets_to_double", 0),
-            "consensus_prob": round(fair_prob, 4),
+            "consensus_prob": round(fair_prob, 6),
             "match_confidence": round(confidence, 2),
             "n_books": n_books,
             "consensus_spread": round(consensus_spread, 4),
@@ -2325,6 +2368,7 @@ def find_ev_opportunities(prediction_markets, sportsbook_entries, fair_index, mi
             "is_prop": sb.get("is_prop", False),
             "liquidity": pred.get("liquidity", 0),
             "volume": pred.get("volume", 0),
+            "sb_last_update": sb.get("last_update", ""),
         }
         opportunities.append(opp)
 
@@ -2820,8 +2864,12 @@ def find_cross_sportsbook_opportunities(sportsbook_entries, fair_index, min_ev_p
 # ─── Core scan logic (callable from CGI or Vercel handler) ───────────────────
 
 def run_scan(params):
-    """Run the full scan and return the response dict."""
+    """Run the full scan and return the response dict.
+    Supports mode='quick' for fast prediction-market-only scans that
+    reuse cached sportsbook data, and mode='full' (default) for a
+    complete refresh of all sources."""
     db = get_db()
+    scan_mode = params.get("mode", "full")  # "quick" or "full"
 
     min_net_pct = float(params.get("min_pct", "-999"))
     sports_filter = params.get("sports", "").split(",") if params.get("sports") else []
@@ -2843,10 +2891,17 @@ def run_scan(params):
     kalshi_markets = []
     sportsbook_entries = []
 
+    # In quick mode, skip the sportsbook API and reuse cached data.
+    # This makes scans ~3× faster and costs zero Odds API quota.
+    if scan_mode == "quick":
+        sportsbook_entries = get_stale_cached(db, "sportsbook_odds") or []
+        sources_status["sportsbook"] = "cached" if sportsbook_entries else "no_data"
+
     with ThreadPoolExecutor(max_workers=3) as executor:
         future_poly = executor.submit(fetch_polymarket_sports, None)
         future_kalshi = executor.submit(fetch_kalshi_sports, None)
-        future_sb = executor.submit(fetch_sportsbook_odds, None, api_key) if api_key else None
+        future_sb = (executor.submit(fetch_sportsbook_odds, None, api_key)
+                     if api_key and scan_mode != "quick" else None)
 
         try:
             poly_markets = future_poly.result(timeout=15)
@@ -2950,6 +3005,7 @@ def run_scan(params):
             "sources": sources_status,
             "errors": errors,
             "is_demo": False,
+            "scan_mode": scan_mode,
             "poly_count": len(poly_markets),
             "kalshi_count": len(kalshi_markets),
             "sportsbook_count": len(sportsbook_entries),
