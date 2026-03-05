@@ -2778,6 +2778,15 @@ def find_cross_sportsbook_opportunities(sportsbook_entries, fair_index, min_ev_p
                     if gross_pct > 15:
                         continue  # stale data
 
+                    # Sanity: for spreads, detect flipped sides (some books
+                    # swap home/away spread signs).  If both best prices are
+                    # on the same side of even (both underdogs), it's bogus.
+                    if mtype == "spreads" and point is not None:
+                        odds_a = best_a.get("american_odds", 0)
+                        odds_b = best_b.get("american_odds", 0)
+                        if odds_a > 0 and odds_b > 0 and gross_pct > 5:
+                            continue  # both underdogs — flipped spread data
+
                     commence = best_a.get("commence_time", "")
                     is_live = False
                     time_display = ""
@@ -2883,6 +2892,9 @@ def find_cross_sportsbook_opportunities(sportsbook_entries, fair_index, min_ev_p
                         if ev is None or ev < min_ev_pct or ev > 30:
                             continue
 
+                        commence = best.get("commence_time", "")
+                        is_live = False
+
                         # Compute Kelly fractions
                         xsb_payout = 1.0 / prob if prob > 0 else 0
                         xsb_b = (xsb_payout - 1.0) if xsb_payout > 1 else 0
@@ -2899,9 +2911,6 @@ def find_cross_sportsbook_opportunities(sportsbook_entries, fair_index, min_ev_p
                             fair_p, xsb_b, xsb_adaptive.get("kelly_adaptive", xsb_kelly),
                             xsb_adaptive.get("kelly_confidence", 0.5)
                         )
-
-                        commence = best.get("commence_time", "")
-                        is_live = False
                         time_display = ""
                         if commence:
                             try:
@@ -3441,6 +3450,12 @@ def run_scan(params):
         # Cross-sportsbook arbs & +EV
         xsb = find_cross_sportsbook_opportunities(sportsbook_entries, fair_index)
         all_opportunities.extend(xsb)
+
+    # Filter out live games — odds change every few seconds, stale before
+    # a manual scanner can act.  Keep only upcoming/pre-match events.
+    include_live = get_config(db, "include_live", True)
+    if not include_live:
+        all_opportunities = [o for o in all_opportunities if not o.get("is_live")]
 
     # Apply sports filter
     if sports_filter and sports_filter[0]:
