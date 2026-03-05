@@ -152,13 +152,17 @@ function escapeHtml(s) {
 
 async function fetchScan(mode = "full") {
   const params = new URLSearchParams();
-  // API key stays server-side only (env var or DB) — never sent from browser
   const minPct = parseFloat(document.getElementById("minProfitSlider").value) || 0;
   if (minPct > 0) params.set("min_pct", minPct.toString());
   if (mode === "quick") params.set("mode", "quick");
 
+  // Send API key via header (not query param) so Vercel ephemeral DB isn't the only source
+  const headers = {};
+  const savedKey = state.config.odds_api_key || "";
+  if (savedKey) headers["X-Odds-Api-Key"] = savedKey;
+
   const url = `${API_BASE}/scan?${params.toString()}`;
-  const resp = await fetch(url);
+  const resp = await fetch(url, { headers });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const data = await resp.json();
   if (!data.opportunities) throw new Error("Invalid response format");
@@ -191,7 +195,7 @@ async function loadConfig() {
     if (saved) Object.assign(state.config, JSON.parse(saved));
   } catch (e) { /* corrupt localStorage */ }
 
-  // Then try backend API (may override localStorage)
+  // Then try backend API (may override localStorage for non-secret fields)
   try {
     const url = `${API_BASE}/config`;
     const resp = await fetch(url);
@@ -200,7 +204,17 @@ async function loadConfig() {
       try {
         const data = JSON.parse(text);
         if (data.config) {
+          // Preserve secret keys from localStorage — backend strips them
+          const preserveKeys = ["odds_api_key", "oddspapi_key", "discord_webhook", "telegram_bot_token"];
+          const saved = {};
+          for (const k of preserveKeys) {
+            if (state.config[k]) saved[k] = state.config[k];
+          }
           Object.assign(state.config, data.config);
+          // Restore secrets that the backend didn't send
+          for (const k of preserveKeys) {
+            if (!state.config[k] && saved[k]) state.config[k] = saved[k];
+          }
         }
       } catch (parseErr) {
         // Invalid JSON, use defaults
@@ -212,9 +226,11 @@ async function loadConfig() {
 }
 
 async function saveConfig(configData) {
-  // Always persist to localStorage (survives Vercel ephemeral storage)
+  // Merge with existing localStorage (don't overwrite — preserves keys user didn't re-enter)
   try {
-    localStorage.setItem("arbscanner_config", JSON.stringify(configData));
+    const existing = JSON.parse(localStorage.getItem("arbscanner_config") || "{}");
+    Object.assign(existing, configData);
+    localStorage.setItem("arbscanner_config", JSON.stringify(existing));
   } catch (e) { /* quota */ }
 
   try {

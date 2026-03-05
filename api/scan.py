@@ -13,6 +13,11 @@ class handler(BaseHTTPRequestHandler):
         query = parse_qs(urlparse(self.path).query)
         params = {k: v[0] for k, v in query.items()}
 
+        # Accept API key from header (Vercel ephemeral DB may not have it)
+        header_key = self.headers.get("X-Odds-Api-Key", "")
+        if header_key:
+            params["api_key"] = header_key
+
         result = scanner.run_scan(params)
 
         body = json.dumps(result, default=scanner._json_default).encode()
@@ -27,7 +32,7 @@ class handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, X-Odds-Api-Key')
         self.end_headers()
 
     def log_message(self, format, *args):
