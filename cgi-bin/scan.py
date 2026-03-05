@@ -347,8 +347,13 @@ SPORT_CATEGORY_KEYWORDS = {
     "boxing": ["boxing", "bout"],
 }
 
-# Sports with 3-way h2h markets (win/draw/lose) — can't arb against binary predictions
-THREE_WAY_SPORTS = {"soccer", "boxing", "mma"}
+# Sports with 3-way h2h markets (win/draw/lose) — can't arb against binary predictions.
+# MMA is intentionally excluded: draws exist (~1-2%) but no book offers draw lines,
+# so 3-way treatment blocks ALL MMA processing with zero benefit.
+THREE_WAY_SPORTS = {"soccer", "boxing"}
+
+# Sports where draws are possible but unpriced — flag in risk notes
+UNPRICED_DRAW_SPORTS = {"mma"}
 
 # Map full team names to sport categories
 TEAM_TO_SPORT = {}
@@ -2840,8 +2845,10 @@ def find_cross_sportsbook_opportunities(sportsbook_entries, fair_index, min_ev_p
                         "ev_pct": 0,
                         "consensus_prob": 0,
                         "match_confidence": 1.0,
-                        "resolution_risk": "low",
-                        "risk_note": "Cross-sportsbook arb — same event, different bookmakers. Low risk.",
+                        "resolution_risk": "medium" if sport_cat in UNPRICED_DRAW_SPORTS else "low",
+                        "risk_note": ("Cross-sportsbook arb (MMA) — draw outcome is possible (~1-2%) but unpriced by books."
+                                      if sport_cat in UNPRICED_DRAW_SPORTS
+                                      else "Cross-sportsbook arb — same event, different bookmakers. Low risk."),
                         "is_prop": best_a.get("is_prop", False),
                         "liquidity": 0,
                         "volume": 0,
@@ -2980,7 +2987,9 @@ def find_cross_sportsbook_opportunities(sportsbook_entries, fair_index, min_ev_p
                             "overround": round(xsb_overround, 4),
                             "risk_score": compute_risk_score(ev, xsb_n_books, xsb_spread, 1.0, is_live),
                             "resolution_risk": risk_score_label(compute_risk_score(ev, xsb_n_books, xsb_spread, 1.0, is_live)),
-                            "risk_note": f"+EV bet: {round(ev, 1)}% edge vs devigged consensus ({xsb_n_books} books).",
+                            "risk_note": (f"+EV bet (MMA — draw possible but unpriced): {round(ev, 1)}% edge vs consensus ({xsb_n_books} books)."
+                                          if sport_cat in UNPRICED_DRAW_SPORTS
+                                          else f"+EV bet: {round(ev, 1)}% edge vs devigged consensus ({xsb_n_books} books)."),
                             "is_prop": best.get("is_prop", False),
                             "liquidity": 0,
                             "volume": 0,
