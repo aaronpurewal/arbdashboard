@@ -364,19 +364,19 @@
                   <div class="tracker-label">Arb Opportunities</div>
                   <div class="analytics-summary" id="trackerArbSummary">
                     <div class="analytics-row"><span>Total arbs detected</span><span id="trackerArbTotal">0</span></div>
-                    <div class="analytics-row"><span>Best edge</span><span id="trackerArbResolved">0</span></div>
-                    <div class="analytics-row"><span>Unique opportunities</span><span id="trackerArbPnL">$0.00</span></div>
-                    <div class="analytics-row"><span>Best edge ever</span><span id="trackerArbAvg">$0.00</span></div>
+                    <div class="analytics-row"><span>Best edge</span><span id="trackerArbResolved">--</span></div>
+                    <div class="analytics-row"><span>Record (W/L/P)</span><span id="trackerArbPnL">0W / 0L / 0P</span></div>
+                    <div class="analytics-row"><span>Best edge ever</span><span id="trackerArbAvg">--</span></div>
                   </div>
                 </div>
                 <div class="tracker-col">
                   <div class="tracker-label">+EV Opportunities</div>
                   <div class="analytics-summary" id="trackerEvSummary">
                     <div class="analytics-row"><span>Total +EV detected</span><span id="trackerEvTotal">0</span></div>
-                    <div class="analytics-row"><span>Avg edge</span><span id="trackerEvResolved">0</span></div>
+                    <div class="analytics-row"><span>Avg edge</span><span id="trackerEvResolved">--</span></div>
                     <div class="analytics-row"><span>Best edge ever</span><span id="trackerEvWinRate">--%</span></div>
-                    <div class="analytics-row"><span>Unique opportunities</span><span id="trackerEvPnL">$0.00</span></div>
-                    <div class="analytics-row"><span>Total tracked</span><span id="trackerEvPending">0</span></div>
+                    <div class="analytics-row"><span>Record (W/L/P)</span><span id="trackerEvPnL">0W / 0L / 0P</span></div>
+                    <div class="analytics-row"><span>Pending</span><span id="trackerEvPending">0</span></div>
                   </div>
                 </div>
               </div>
@@ -392,6 +392,22 @@
                   <div class="chart-container" id="chartTrackerEv">
                     <div class="chart-placeholder">+EV edge data will appear as opportunities are detected</div>
                   </div>
+                </div>
+              </div>
+              <div style="margin-top:16px">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                  <h4 style="margin:0;font-size:0.8rem;color:var(--text-primary)">Bet Log</h4>
+                  <select id="trackerLogFilter" style="font-size:0.65rem;padding:2px 6px;background:var(--bg-secondary);color:var(--text-secondary);border:1px solid var(--border-subtle);border-radius:4px">
+                    <option value="all">All</option>
+                    <option value="arb">Arbs</option>
+                    <option value="ev">+EV</option>
+                    <option value="pending">Pending</option>
+                    <option value="won">Won</option>
+                    <option value="lost">Lost</option>
+                  </select>
+                </div>
+                <div id="trackerLogTable" class="tracker-log-wrap">
+                  <div class="chart-placeholder">No tracked bets yet</div>
                 </div>
               </div>
               <div class="analytics-hint">All opportunities are permanently tracked in your browser. Data survives refreshes, deploys, and server restarts. Clear browser data to reset.</div>

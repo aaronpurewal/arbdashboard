@@ -1843,6 +1843,11 @@ function setupAnalyticsToggle() {
       renderAnalytics();
     });
   });
+  // Tracker log filter
+  const logFilter = document.getElementById("trackerLogFilter");
+  if (logFilter) {
+    logFilter.addEventListener("change", () => renderTrackerStats());
+  }
 }
 
 function renderAnalytics() {
@@ -1994,30 +1999,34 @@ function renderTrackerStats() {
   const evOpps = tracked.filter(t => t.type === "ev");
 
   // Arb stats
+  const arbWon = arbOpps.filter(a => a.status === "won").length;
+  const arbLost = arbOpps.filter(a => a.status === "lost").length;
+  const arbPending = arbOpps.filter(a => !a.status || a.status === "pending").length;
   document.getElementById("trackerArbTotal").textContent = arbOpps.length;
   const bestArbEdge = arbOpps.length > 0 ? Math.max(...arbOpps.map(a => a.edge || 0)) : 0;
-  document.getElementById("trackerArbResolved").textContent = arbOpps.length > 0
-    ? `Best: ${bestArbEdge.toFixed(1)}%` : "0";
-  const arbPnLEl = document.getElementById("trackerArbPnL");
-  arbPnLEl.textContent = arbOpps.length > 0
-    ? `${arbOpps.length} unique` : "$0.00";
-  arbPnLEl.style.color = "";
+  document.getElementById("trackerArbResolved").textContent = bestArbEdge > 0
+    ? `${bestArbEdge.toFixed(1)}%` : "--";
+  document.getElementById("trackerArbPnL").textContent =
+    `${arbWon}W / ${arbLost}L / ${arbPending}P`;
+  document.getElementById("trackerArbPnL").style.color = "";
   document.getElementById("trackerArbAvg").textContent = bestArbEdge > 0
-    ? `${bestArbEdge.toFixed(1)}%` : "$0.00";
+    ? `${bestArbEdge.toFixed(1)}%` : "--";
 
   // EV stats
+  const evWon = evOpps.filter(e => e.status === "won").length;
+  const evLost = evOpps.filter(e => e.status === "lost").length;
+  const evPending = evOpps.filter(e => !e.status || e.status === "pending").length;
   document.getElementById("trackerEvTotal").textContent = evOpps.length;
   const bestEvEdge = evOpps.length > 0 ? Math.max(...evOpps.map(e => e.edge || 0)) : 0;
   const avgEvEdge = evOpps.length > 0 ? evOpps.reduce((s, e) => s + (e.edge || 0), 0) / evOpps.length : 0;
-  document.getElementById("trackerEvResolved").textContent = evOpps.length > 0
-    ? `Avg edge: ${avgEvEdge.toFixed(1)}%` : "0";
+  document.getElementById("trackerEvResolved").textContent = avgEvEdge > 0
+    ? `${avgEvEdge.toFixed(1)}%` : "--";
   document.getElementById("trackerEvWinRate").textContent = bestEvEdge > 0
     ? `${bestEvEdge.toFixed(1)}%` : "--%";
-  const evPnLEl = document.getElementById("trackerEvPnL");
-  evPnLEl.textContent = evOpps.length > 0
-    ? `${evOpps.length} unique` : "$0.00";
-  evPnLEl.style.color = "";
-  document.getElementById("trackerEvPending").textContent = evOpps.length;
+  document.getElementById("trackerEvPnL").textContent =
+    `${evWon}W / ${evLost}L / ${evPending}P`;
+  document.getElementById("trackerEvPnL").style.color = "";
+  document.getElementById("trackerEvPending").textContent = evPending;
 
   // Show tracking start date
   const sinceEl = document.getElementById("trackingSince");
@@ -2037,6 +2046,103 @@ function renderTrackerStats() {
     const pts = evOpps.map(r => { cum += r.edge || 0; return { date: r.found_at, pnl: cum }; });
     renderPnLChart("chartTrackerEv", pts);
   }
+
+  renderTrackerLog(tracked);
+}
+
+function renderTrackerLog(tracked) {
+  const container = document.getElementById("trackerLogTable");
+  if (!container) return;
+
+  const filter = document.getElementById("trackerLogFilter")?.value || "all";
+  let rows = tracked || [];
+  if (filter === "arb") rows = rows.filter(t => t.type === "arb");
+  else if (filter === "ev") rows = rows.filter(t => t.type === "ev");
+  else if (filter === "pending" || filter === "won" || filter === "lost")
+    rows = rows.filter(t => (t.status || "pending") === filter);
+
+  if (rows.length === 0) {
+    container.innerHTML = '<div class="chart-placeholder">No tracked bets yet</div>';
+    return;
+  }
+
+  // Show newest first
+  const sorted = [...rows].reverse();
+
+  let html = `<table>
+    <thead><tr>
+      <th>Type</th><th>Sport</th><th>Event</th><th>Side</th>
+      <th>Book</th><th>Odds</th><th>Edge</th><th>Date</th>
+      <th>Found</th><th>Status</th><th></th>
+    </tr></thead><tbody>`;
+
+  for (const t of sorted) {
+    const typeBadge = t.type === "arb"
+      ? '<span class="type-badge arb" style="font-size:0.55rem;padding:1px 5px">ARB</span>'
+      : '<span class="type-badge ev" style="font-size:0.55rem;padding:1px 5px">+EV</span>';
+
+    const eventDate = t.commence_time
+      ? new Date(t.commence_time).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+      : "--";
+
+    const foundDate = t.found_at
+      ? new Date(t.found_at).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+      : "--";
+
+    const status = t.status || "pending";
+    const statusBadge = `<span class="status-badge ${status}">${status}</span>`;
+
+    const side = t.side_a || t.side || "";
+    const book = t.platform_a || t.platform || "";
+    const odds = t.odds_a ? formatOdds(t.odds_a) : (t.odds ? formatOdds(t.odds) : "--");
+    const edge = t.edge ? `${t.edge.toFixed(1)}%` : "--";
+    const eventShort = (t.event || "").length > 30 ? t.event.substring(0, 28) + "..." : (t.event || "--");
+
+    // Encode the key for use in onclick
+    const safeKey = escapeHtml(t.key).replace(/'/g, "\\'");
+
+    html += `<tr>
+      <td>${typeBadge}</td>
+      <td style="font-size:0.6rem">${escapeHtml(t.sport || "")}</td>
+      <td title="${escapeHtml(t.event || "")}" style="white-space:normal;max-width:160px">${escapeHtml(eventShort)}</td>
+      <td style="font-weight:600">${escapeHtml(side)}</td>
+      <td>${escapeHtml(book)}</td>
+      <td class="odds-cell">${odds}</td>
+      <td style="color:var(--green);font-weight:600">${edge}</td>
+      <td>${eventDate}</td>
+      <td style="color:var(--text-dim)">${foundDate}</td>
+      <td>${statusBadge}</td>
+      <td>
+        <select class="tracker-status-select" data-key="${safeKey}" style="font-size:0.55rem;padding:1px 3px;background:var(--bg-secondary);color:var(--text-secondary);border:1px solid var(--border-subtle);border-radius:3px">
+          <option value="pending" ${status === "pending" ? "selected" : ""}>Pending</option>
+          <option value="won" ${status === "won" ? "selected" : ""}>Won</option>
+          <option value="lost" ${status === "lost" ? "selected" : ""}>Lost</option>
+        </select>
+      </td>
+    </tr>`;
+  }
+
+  html += "</tbody></table>";
+  container.innerHTML = html;
+
+  // Attach status change handlers
+  container.querySelectorAll(".tracker-status-select").forEach(sel => {
+    sel.addEventListener("change", (e) => {
+      updateTrackerStatus(e.target.dataset.key, e.target.value);
+    });
+  });
+}
+
+function updateTrackerStatus(key, newStatus) {
+  try {
+    const tracked = JSON.parse(localStorage.getItem(LS_TRACKER_OPPS) || "[]");
+    const entry = tracked.find(t => t.key === key);
+    if (entry) {
+      entry.status = newStatus;
+      localStorage.setItem(LS_TRACKER_OPPS, JSON.stringify(tracked));
+      renderTrackerStats(); // re-render stats + log
+    }
+  } catch (e) { /* ignore */ }
 }
 
 function renderBarChart(containerId, dataObj, labelFn) {
@@ -2171,14 +2277,17 @@ function logScanToHistory(data) {
           event: opp.event,
           sport: opp.sport,
           market: opp.market_type || "h2h",
-          side: opp.side_a || opp.side || "",
-          platform: opp.platform_a?.name || opp.platform || "",
+          side_a: opp.platform_a?.side || "",
+          side_b: opp.platform_b?.side || "",
+          platform_a: opp.platform_a?.name || opp.platform || "",
           platform_b: opp.platform_b?.name || "",
+          odds_a: opp.platform_a?.american_odds || 0,
+          odds_b: opp.platform_b?.american_odds || 0,
           edge: opp.net_arb_pct || opp.ev_pct || 0,
-          odds: opp.platform_a?.odds || opp.american_odds || 0,
           fair_prob: opp.fair_prob || null,
           found_at: now,
           commence_time: opp.commence_time || "",
+          status: "pending", // pending | won | lost
         });
       }
       // Cap

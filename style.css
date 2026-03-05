@@ -2699,6 +2699,52 @@ tr.tier-ev .step-link:hover {
 @media (max-width: 768px) {
   .tracker-grid, .tracker-charts { grid-template-columns: 1fr; }
 }
+/* Tracker bet log table */
+.tracker-log-wrap {
+  max-height: 360px;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+.tracker-log-wrap table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.65rem;
+}
+.tracker-log-wrap th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-tertiary);
+  padding: 6px 8px;
+  text-align: left;
+  font-weight: 700;
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border-primary);
+}
+.tracker-log-wrap td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.tracker-log-wrap tr:hover td {
+  background: var(--bg-hover);
+}
+.tracker-log-wrap .status-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.55rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.status-badge.pending { background: rgba(255,193,7,0.15); color: #ffc107; }
+.status-badge.won { background: rgba(0,230,118,0.15); color: var(--green); }
+.status-badge.lost { background: rgba(255,82,82,0.15); color: var(--red); }
 .analytics-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
