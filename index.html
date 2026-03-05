@@ -357,43 +357,44 @@
               </div>
             </div>
             <div class="analytics-card full-width">
-              <h3>Scanner Track Record (auto-tracked, $100/bet)</h3>
+              <h3>All-Time Scanner Track Record</h3>
+              <div id="trackingSince" style="font-size:0.75rem;color:var(--text-dim);margin:-0.5rem 0 0.75rem;font-style:italic">Tracking since March 5, 2026 5:00 PM EST</div>
               <div class="tracker-grid">
                 <div class="tracker-col">
-                  <div class="tracker-label">Arb Performance</div>
+                  <div class="tracker-label">Arb Opportunities</div>
                   <div class="analytics-summary" id="trackerArbSummary">
                     <div class="analytics-row"><span>Total arbs detected</span><span id="trackerArbTotal">0</span></div>
-                    <div class="analytics-row"><span>Resolved</span><span id="trackerArbResolved">0</span></div>
-                    <div class="analytics-row"><span>Cumulative P&amp;L</span><span id="trackerArbPnL">$0.00</span></div>
-                    <div class="analytics-row"><span>Avg profit / arb</span><span id="trackerArbAvg">$0.00</span></div>
+                    <div class="analytics-row"><span>Best edge</span><span id="trackerArbResolved">0</span></div>
+                    <div class="analytics-row"><span>Unique opportunities</span><span id="trackerArbPnL">$0.00</span></div>
+                    <div class="analytics-row"><span>Best edge ever</span><span id="trackerArbAvg">$0.00</span></div>
                   </div>
                 </div>
                 <div class="tracker-col">
-                  <div class="tracker-label">+EV Performance</div>
+                  <div class="tracker-label">+EV Opportunities</div>
                   <div class="analytics-summary" id="trackerEvSummary">
                     <div class="analytics-row"><span>Total +EV detected</span><span id="trackerEvTotal">0</span></div>
-                    <div class="analytics-row"><span>Resolved (W/L)</span><span id="trackerEvResolved">0</span></div>
-                    <div class="analytics-row"><span>Win Rate</span><span id="trackerEvWinRate">--%</span></div>
-                    <div class="analytics-row"><span>Cumulative P&amp;L</span><span id="trackerEvPnL">$0.00</span></div>
-                    <div class="analytics-row"><span>Pending resolution</span><span id="trackerEvPending">0</span></div>
+                    <div class="analytics-row"><span>Avg edge</span><span id="trackerEvResolved">0</span></div>
+                    <div class="analytics-row"><span>Best edge ever</span><span id="trackerEvWinRate">--%</span></div>
+                    <div class="analytics-row"><span>Unique opportunities</span><span id="trackerEvPnL">$0.00</span></div>
+                    <div class="analytics-row"><span>Total tracked</span><span id="trackerEvPending">0</span></div>
                   </div>
                 </div>
               </div>
               <div class="tracker-charts">
                 <div class="tracker-chart-col">
-                  <div class="tracker-sublabel">Arb Cumulative P&amp;L</div>
+                  <div class="tracker-sublabel">Arb Edges Over Time</div>
                   <div class="chart-container" id="chartTrackerArb">
-                    <div class="chart-placeholder">Arb P&amp;L will appear as opportunities are detected</div>
+                    <div class="chart-placeholder">Arb edge data will appear as opportunities are detected</div>
                   </div>
                 </div>
                 <div class="tracker-chart-col">
-                  <div class="tracker-sublabel">+EV Cumulative P&amp;L</div>
+                  <div class="tracker-sublabel">+EV Edges Over Time</div>
                   <div class="chart-container" id="chartTrackerEv">
-                    <div class="chart-placeholder">+EV P&amp;L will appear as bets resolve</div>
+                    <div class="chart-placeholder">+EV edge data will appear as opportunities are detected</div>
                   </div>
                 </div>
               </div>
-              <div class="analytics-hint">Every opportunity the scanner flags is auto-tracked with a hypothetical $100 stake. Arbs resolve immediately (guaranteed profit). +EV bets resolve after the event completes via the scores API.</div>
+              <div class="analytics-hint">All opportunities are permanently tracked in your browser. Data survives refreshes, deploys, and server restarts. Clear browser data to reset.</div>
             </div>
             <div class="analytics-card full-width">
               <h3>Your Journal Performance (manually tracked bets)</h3>

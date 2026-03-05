@@ -40,6 +40,13 @@ const state = {
 const QUICK_SCAN_INTERVAL = 10;
 const FULL_SCAN_EVERY = 4;  // full scan every 4th cycle (~40s)
 
+// Permanent tracking — all data lives in localStorage to survive Vercel deploys
+const TRACKING_START = "2026-03-05T22:00:00Z"; // 5:00 PM EST
+const LS_SCAN_HISTORY = "arbscanner_scan_history";
+const LS_TRACKER_OPPS = "arbscanner_tracker_opps";
+const MAX_SCAN_HISTORY = 5000;  // cap entries to stay within ~5MB
+const MAX_TRACKER_OPPS = 10000;
+
 // ─── Utility Functions ────────────────────────────────────────────────────────
 
 function formatOdds(american) {
@@ -1799,13 +1806,27 @@ async function deleteBet(id) {
 let _scanHistory = [];
 
 async function loadAnalytics() {
+  // Primary source: localStorage (survives deploys)
   try {
-    const resp = await fetch(`${API_BASE}/bets?endpoint=scan_history`);
-    const data = await resp.json();
-    _scanHistory = data.scan_history || [];
+    _scanHistory = JSON.parse(localStorage.getItem(LS_SCAN_HISTORY) || "[]");
   } catch (e) {
     _scanHistory = [];
   }
+
+  // Merge any server-side history we don't already have (one-time migration)
+  try {
+    const resp = await fetch(`${API_BASE}/bets?endpoint=scan_history`);
+    const data = await resp.json();
+    const serverHistory = data.scan_history || [];
+    if (serverHistory.length > 0 && _scanHistory.length === 0) {
+      // Bootstrap from server if localStorage is empty
+      _scanHistory = serverHistory.map(h => ({
+        ...h,
+        ts: h.scanned_at || new Date().toISOString(),
+      }));
+      try { localStorage.setItem(LS_SCAN_HISTORY, JSON.stringify(_scanHistory)); } catch (e) {}
+    }
+  } catch (e) { /* server may be unavailable */ }
 
   await loadBets();
   renderAnalytics();
@@ -1963,51 +1984,58 @@ function renderAnalytics() {
 }
 
 function renderTrackerStats() {
-  const tracker = state.meta?.tracker;
-  if (!tracker || !tracker.stats) return;
+  // Read tracked opportunities from localStorage
+  let tracked = [];
+  try {
+    tracked = JSON.parse(localStorage.getItem(LS_TRACKER_OPPS) || "[]");
+  } catch (e) { tracked = []; }
 
-  const arb = tracker.stats.arb || {};
-  const ev = tracker.stats.ev || {};
+  const arbOpps = tracked.filter(t => t.type === "arb");
+  const evOpps = tracked.filter(t => t.type === "ev");
 
   // Arb stats
-  document.getElementById("trackerArbTotal").textContent = arb.total || 0;
-  document.getElementById("trackerArbResolved").textContent = (arb.won || 0) + (arb.lost || 0);
+  document.getElementById("trackerArbTotal").textContent = arbOpps.length;
+  const bestArbEdge = arbOpps.length > 0 ? Math.max(...arbOpps.map(a => a.edge || 0)) : 0;
+  document.getElementById("trackerArbResolved").textContent = arbOpps.length > 0
+    ? `Best: ${bestArbEdge.toFixed(1)}%` : "0";
   const arbPnLEl = document.getElementById("trackerArbPnL");
-  arbPnLEl.textContent = formatMoney(arb.pnl || 0);
-  arbPnLEl.style.color = (arb.pnl || 0) > 0 ? "var(--green)" : (arb.pnl || 0) < 0 ? "var(--red)" : "";
-  const arbResolved = (arb.won || 0) + (arb.lost || 0);
-  document.getElementById("trackerArbAvg").textContent = arbResolved > 0
-    ? formatMoney((arb.pnl || 0) / arbResolved) : "$0.00";
+  arbPnLEl.textContent = arbOpps.length > 0
+    ? `${arbOpps.length} unique` : "$0.00";
+  arbPnLEl.style.color = "";
+  document.getElementById("trackerArbAvg").textContent = bestArbEdge > 0
+    ? `${bestArbEdge.toFixed(1)}%` : "$0.00";
 
   // EV stats
-  document.getElementById("trackerEvTotal").textContent = ev.total || 0;
-  const evWon = ev.won || 0;
-  const evLost = ev.lost || 0;
-  const evResolved = evWon + evLost;
-  document.getElementById("trackerEvResolved").textContent = `${evResolved} (${evWon}W / ${evLost}L)`;
-  document.getElementById("trackerEvWinRate").textContent = evResolved > 0
-    ? (evWon / evResolved * 100).toFixed(0) + "%" : "--%";
+  document.getElementById("trackerEvTotal").textContent = evOpps.length;
+  const bestEvEdge = evOpps.length > 0 ? Math.max(...evOpps.map(e => e.edge || 0)) : 0;
+  const avgEvEdge = evOpps.length > 0 ? evOpps.reduce((s, e) => s + (e.edge || 0), 0) / evOpps.length : 0;
+  document.getElementById("trackerEvResolved").textContent = evOpps.length > 0
+    ? `Avg edge: ${avgEvEdge.toFixed(1)}%` : "0";
+  document.getElementById("trackerEvWinRate").textContent = bestEvEdge > 0
+    ? `${bestEvEdge.toFixed(1)}%` : "--%";
   const evPnLEl = document.getElementById("trackerEvPnL");
-  evPnLEl.textContent = formatMoney(ev.pnl || 0);
-  evPnLEl.style.color = (ev.pnl || 0) > 0 ? "var(--green)" : (ev.pnl || 0) < 0 ? "var(--red)" : "";
-  document.getElementById("trackerEvPending").textContent = ev.pending || 0;
+  evPnLEl.textContent = evOpps.length > 0
+    ? `${evOpps.length} unique` : "$0.00";
+  evPnLEl.style.color = "";
+  document.getElementById("trackerEvPending").textContent = evOpps.length;
 
-  // Build cumulative P&L charts from recent resolved bets
-  const recent = tracker.recent || [];
-  if (recent.length > 1) {
-    const arbRecent = recent.filter(r => r.opp_type === "arb").reverse();
-    const evRecent = recent.filter(r => r.opp_type === "ev").reverse();
+  // Show tracking start date
+  const sinceEl = document.getElementById("trackingSince");
+  if (sinceEl) {
+    sinceEl.textContent = "Tracking since March 5, 2026 5:00 PM EST";
+  }
 
-    if (arbRecent.length > 1) {
-      let cum = 0;
-      const pts = arbRecent.map(r => { cum += r.pnl || 0; return { date: r.resolved_at, pnl: cum }; });
-      renderPnLChart("chartTrackerArb", pts);
-    }
-    if (evRecent.length > 1) {
-      let cum = 0;
-      const pts = evRecent.map(r => { cum += r.pnl || 0; return { date: r.resolved_at, pnl: cum }; });
-      renderPnLChart("chartTrackerEv", pts);
-    }
+  // Edge over time chart (arb)
+  if (arbOpps.length > 1) {
+    let cum = 0;
+    const pts = arbOpps.map(r => { cum += r.edge || 0; return { date: r.found_at, pnl: cum }; });
+    renderPnLChart("chartTrackerArb", pts);
+  }
+  // Edge over time chart (ev)
+  if (evOpps.length > 1) {
+    let cum = 0;
+    const pts = evOpps.map(r => { cum += r.edge || 0; return { date: r.found_at, pnl: cum }; });
+    renderPnLChart("chartTrackerEv", pts);
   }
 }
 
@@ -2097,9 +2125,10 @@ function renderPnLChart(containerId, points) {
   container.replaceChildren(wrapper);
 }
 
-// Log scan results for analytics
-async function logScanToHistory(data) {
+// Log scan results to localStorage for permanent analytics
+function logScanToHistory(data) {
   if (!data || !data.opportunities) return;
+  const now = new Date().toISOString();
   const opps = data.opportunities;
   const arbs = opps.filter(o => o.type === "arb");
   const evs = opps.filter(o => o.type === "ev");
@@ -2107,9 +2136,60 @@ async function logScanToHistory(data) {
   const bestEdge = edges.length > 0 ? Math.max(...edges) : 0;
   const avgEdge = edges.length > 0 ? edges.reduce((s, e) => s + e, 0) / edges.length : 0;
   const sports = [...new Set(opps.map(o => o.sport).filter(Boolean))].join(",");
+  const hour = new Date().getHours();
 
+  // 1. Save scan summary to scan history
   try {
-    await fetch(`${API_BASE}/bets`, {
+    const history = JSON.parse(localStorage.getItem(LS_SCAN_HISTORY) || "[]");
+    history.push({
+      ts: now,
+      hour,
+      opp_count: opps.length,
+      arb_count: arbs.length,
+      ev_count: evs.length,
+      best_edge: bestEdge,
+      avg_edge: avgEdge,
+      sports,
+    });
+    // Cap to prevent localStorage bloat
+    if (history.length > MAX_SCAN_HISTORY) history.splice(0, history.length - MAX_SCAN_HISTORY);
+    localStorage.setItem(LS_SCAN_HISTORY, JSON.stringify(history));
+  } catch (e) { /* quota or parse error */ }
+
+  // 2. Track individual opportunities (deduped by composite key)
+  if (opps.length > 0) {
+    try {
+      const tracked = JSON.parse(localStorage.getItem(LS_TRACKER_OPPS) || "[]");
+      const existing = new Set(tracked.map(t => t.key));
+      for (const opp of opps) {
+        const key = `${opp.type}|${opp.event}|${opp.market_type || "h2h"}|${opp.side_a || opp.side || ""}|${(opp.platform_a?.name || opp.platform || "")}`;
+        if (existing.has(key)) continue;
+        existing.add(key);
+        tracked.push({
+          key,
+          type: opp.type, // "arb" or "ev"
+          event: opp.event,
+          sport: opp.sport,
+          market: opp.market_type || "h2h",
+          side: opp.side_a || opp.side || "",
+          platform: opp.platform_a?.name || opp.platform || "",
+          platform_b: opp.platform_b?.name || "",
+          edge: opp.net_arb_pct || opp.ev_pct || 0,
+          odds: opp.platform_a?.odds || opp.american_odds || 0,
+          fair_prob: opp.fair_prob || null,
+          found_at: now,
+          commence_time: opp.commence_time || "",
+        });
+      }
+      // Cap
+      if (tracked.length > MAX_TRACKER_OPPS) tracked.splice(0, tracked.length - MAX_TRACKER_OPPS);
+      localStorage.setItem(LS_TRACKER_OPPS, JSON.stringify(tracked));
+    } catch (e) { /* quota */ }
+  }
+
+  // Also fire-and-forget to backend (may fail on ephemeral Vercel — that's fine)
+  try {
+    fetch(`${API_BASE}/bets`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -2122,7 +2202,7 @@ async function logScanToHistory(data) {
         sports,
       }),
     });
-  } catch (e) { /* analytics logging is best-effort */ }
+  } catch (e) { /* best-effort */ }
 }
 
 // ─── Initialize ───────────────────────────────────────────────────────────────
