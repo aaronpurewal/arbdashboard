@@ -43,12 +43,12 @@
 
       <div class="topbar-right">
         <div class="scan-timer" id="scanTimer">
-          Next scan: <span class="countdown" id="countdown">--</span>
+          Scan: <span class="countdown" id="countdown">manual</span>
         </div>
-        <label class="auto-scan-toggle" title="Toggle auto-scan">
-          <input type="checkbox" id="toggleAutoScan" checked>
+        <label class="auto-scan-toggle disabled" title="Auto-scan is a Pro feature">
+          <input type="checkbox" id="toggleAutoScan" disabled>
           <span class="auto-scan-slider"></span>
-          <span class="auto-scan-label">AUTO</span>
+          <span class="auto-scan-label">AUTO <span class="pro-badge">PRO</span></span>
         </label>
         <button class="btn btn-primary" id="btnRefresh" title="Scan now">
           ↻ SCAN
@@ -155,6 +155,16 @@
       <!-- ─── Dashboard ─── -->
       <main class="dashboard" id="dashboard">
 
+        <!-- Tab Navigation -->
+        <div class="tab-bar">
+          <button class="tab-btn active" data-tab="scanner">Scanner</button>
+          <button class="tab-btn" data-tab="journal">Journal</button>
+          <button class="tab-btn" data-tab="analytics">Analytics</button>
+        </div>
+
+        <!-- ═══ TAB: Scanner ═══ -->
+        <div class="tab-panel active" id="tabScanner">
+
         <!-- Stats Bar -->
         <div class="stats-bar" id="statsBar">
           <div class="stat-card">
@@ -244,6 +254,162 @@
           </div>
         </div>
 
+        </div><!-- /tabScanner -->
+
+        <!-- ═══ TAB: Journal ═══ -->
+        <div class="tab-panel" id="tabJournal">
+          <div class="journal-header">
+            <div class="journal-stats">
+              <div class="stat-card">
+                <div class="stat-label">Total Bets</div>
+                <div class="stat-value" id="journalTotalBets">0</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">Win Rate</div>
+                <div class="stat-value green" id="journalWinRate">--%</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">Total P&amp;L</div>
+                <div class="stat-value" id="journalPnL">$0.00</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">ROI</div>
+                <div class="stat-value" id="journalROI">--%</div>
+              </div>
+            </div>
+            <div class="journal-actions">
+              <select id="journalFilter">
+                <option value="all">All Bets</option>
+                <option value="open">Open</option>
+                <option value="won">Won</option>
+                <option value="lost">Lost</option>
+                <option value="void">Void</option>
+              </select>
+              <button class="btn btn-sm" id="btnAddBetManual">+ Log Bet</button>
+            </div>
+          </div>
+          <div class="table-scroll">
+            <table id="journalTable">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Event</th>
+                  <th>Sport</th>
+                  <th>Platform</th>
+                  <th>Side</th>
+                  <th>Odds</th>
+                  <th>Stake</th>
+                  <th>Status</th>
+                  <th>P&amp;L</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="journalTableBody"></tbody>
+            </table>
+            <div class="empty-state" id="journalEmpty" style="display:none">
+              <div class="empty-state-inner">
+                <div class="title">No bets tracked yet</div>
+                <div class="subtitle">Click "Track Bet" on any opportunity in the Scanner tab, or use "Log Bet" above to add manually.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══ TAB: Analytics ═══ -->
+        <div class="tab-panel" id="tabAnalytics">
+          <div class="analytics-type-toggle">
+            <button class="analytics-type-btn active" data-atype="all">All</button>
+            <button class="analytics-type-btn" data-atype="arb">Arbs Only</button>
+            <button class="analytics-type-btn" data-atype="ev">+EV Only</button>
+          </div>
+          <div class="analytics-grid">
+            <div class="analytics-card">
+              <h3>Your P&amp;L Over Time</h3>
+              <div class="chart-container" id="chartPnL">
+                <div class="chart-placeholder">Track bets in the Journal to see your P&amp;L curve</div>
+              </div>
+              <div class="analytics-hint" id="pnlHint">Only includes bets you actually tracked and resolved — not hypothetical.</div>
+            </div>
+            <div class="analytics-card">
+              <h3>Opportunities Detected by Hour</h3>
+              <div class="chart-container" id="chartByHour">
+                <div class="chart-placeholder">Scan data will appear after a few scans</div>
+              </div>
+            </div>
+            <div class="analytics-card">
+              <h3>Edge Distribution (Scanner)</h3>
+              <div class="chart-container" id="chartEdgeDist">
+                <div class="chart-placeholder">Need scan history to display</div>
+              </div>
+            </div>
+            <div class="analytics-card">
+              <h3>Scan Summary</h3>
+              <div class="analytics-summary" id="analyticsSummary">
+                <div class="analytics-row"><span>Total scans</span><span id="analyticsScans">0</span></div>
+                <div class="analytics-row"><span>Arbs found</span><span id="analyticsArbCount">0</span></div>
+                <div class="analytics-row"><span>+EV bets found</span><span id="analyticsEvCount">0</span></div>
+                <div class="analytics-row"><span>Avg arbs / scan</span><span id="analyticsAvgArbs">--</span></div>
+                <div class="analytics-row"><span>Avg +EV / scan</span><span id="analyticsAvgEvs">--</span></div>
+                <div class="analytics-row"><span>Best arb edge</span><span id="analyticsBestArb">--%</span></div>
+                <div class="analytics-row"><span>Best +EV edge</span><span id="analyticsBestEv">--%</span></div>
+                <div class="analytics-row"><span>Most common sport</span><span id="analyticsTopSport">--</span></div>
+                <div class="analytics-row"><span>Best time to scan</span><span id="analyticsBestHour">--</span></div>
+              </div>
+            </div>
+            <div class="analytics-card full-width">
+              <h3>Scanner Track Record (auto-tracked, $100/bet)</h3>
+              <div class="tracker-grid">
+                <div class="tracker-col">
+                  <div class="tracker-label">Arb Performance</div>
+                  <div class="analytics-summary" id="trackerArbSummary">
+                    <div class="analytics-row"><span>Total arbs detected</span><span id="trackerArbTotal">0</span></div>
+                    <div class="analytics-row"><span>Resolved</span><span id="trackerArbResolved">0</span></div>
+                    <div class="analytics-row"><span>Cumulative P&amp;L</span><span id="trackerArbPnL">$0.00</span></div>
+                    <div class="analytics-row"><span>Avg profit / arb</span><span id="trackerArbAvg">$0.00</span></div>
+                  </div>
+                </div>
+                <div class="tracker-col">
+                  <div class="tracker-label">+EV Performance</div>
+                  <div class="analytics-summary" id="trackerEvSummary">
+                    <div class="analytics-row"><span>Total +EV detected</span><span id="trackerEvTotal">0</span></div>
+                    <div class="analytics-row"><span>Resolved (W/L)</span><span id="trackerEvResolved">0</span></div>
+                    <div class="analytics-row"><span>Win Rate</span><span id="trackerEvWinRate">--%</span></div>
+                    <div class="analytics-row"><span>Cumulative P&amp;L</span><span id="trackerEvPnL">$0.00</span></div>
+                    <div class="analytics-row"><span>Pending resolution</span><span id="trackerEvPending">0</span></div>
+                  </div>
+                </div>
+              </div>
+              <div class="tracker-charts">
+                <div class="tracker-chart-col">
+                  <div class="tracker-sublabel">Arb Cumulative P&amp;L</div>
+                  <div class="chart-container" id="chartTrackerArb">
+                    <div class="chart-placeholder">Arb P&amp;L will appear as opportunities are detected</div>
+                  </div>
+                </div>
+                <div class="tracker-chart-col">
+                  <div class="tracker-sublabel">+EV Cumulative P&amp;L</div>
+                  <div class="chart-container" id="chartTrackerEv">
+                    <div class="chart-placeholder">+EV P&amp;L will appear as bets resolve</div>
+                  </div>
+                </div>
+              </div>
+              <div class="analytics-hint">Every opportunity the scanner flags is auto-tracked with a hypothetical $100 stake. Arbs resolve immediately (guaranteed profit). +EV bets resolve after the event completes via the scores API.</div>
+            </div>
+            <div class="analytics-card full-width">
+              <h3>Your Journal Performance (manually tracked bets)</h3>
+              <div class="analytics-summary" id="journalPerformanceSummary">
+                <div class="analytics-row"><span>Tracked bets</span><span id="perfTotalBets">0</span></div>
+                <div class="analytics-row"><span>Arb bets</span><span id="perfArbBets">0 (0W / 0L)</span></div>
+                <div class="analytics-row"><span>Arb P&amp;L</span><span id="perfArbPnL">$0.00</span></div>
+                <div class="analytics-row"><span>+EV bets</span><span id="perfEvBets">0 (0W / 0L)</span></div>
+                <div class="analytics-row"><span>+EV P&amp;L</span><span id="perfEvPnL">$0.00</span></div>
+                <div class="analytics-row"><span>+EV Win Rate</span><span id="perfEvWinRate">--%</span></div>
+                <div class="analytics-row"><span>Total ROI</span><span id="perfROI">--%</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
       </main>
     </div>
 
@@ -271,34 +437,38 @@
         <button class="modal-close" id="modalClose">&times;</button>
       </div>
       <div class="modal-body">
+        <div class="settings-section-label">API Keys</div>
         <div class="form-group">
           <label for="inputOddsApiKey">The Odds API Key</label>
           <input type="password" id="inputOddsApiKey" placeholder="Enter your API key...">
-          <div class="hint">Get a free key at <a href="https://the-odds-api.com" target="_blank" rel="noopener noreferrer">the-odds-api.com</a> (500 credits/month)</div>
+          <div class="hint">Get a free key at <a href="https://the-odds-api.com" target="_blank" rel="noopener noreferrer">the-odds-api.com</a>. Leave blank to keep existing key.</div>
         </div>
         <div class="form-group">
           <label for="inputOddsPapiKey">OddsPapi API Key (optional)</label>
           <input type="password" id="inputOddsPapiKey" placeholder="Optional unified API key...">
           <div class="hint">Covers Polymarket + Kalshi + 350 sportsbooks. <a href="https://oddspapi.io" target="_blank" rel="noopener noreferrer">oddspapi.io</a></div>
         </div>
+
+        <div class="settings-section-label">Scanner</div>
         <div class="form-row">
-          <div class="form-group">
-            <label for="inputRefreshInterval">Refresh Interval</label>
-            <select id="inputRefreshInterval">
-              <option value="30">30 seconds</option>
-              <option value="60" selected>1 minute</option>
-              <option value="120">2 minutes</option>
-              <option value="300">5 minutes</option>
-            </select>
-          </div>
           <div class="form-group">
             <label for="inputDefaultBankroll">Default Bankroll ($)</label>
             <input type="number" id="inputDefaultBankroll" value="100" min="1" step="1">
           </div>
+          <div class="form-group">
+            <label for="inputDevigMethod">Devig Method</label>
+            <select id="inputDevigMethod">
+              <option value="power">Power (recommended)</option>
+              <option value="multiplicative">Multiplicative</option>
+              <option value="additive">Additive</option>
+              <option value="shin">Shin</option>
+            </select>
+            <div class="hint">How bookmaker vig is removed to estimate fair odds</div>
+          </div>
         </div>
         <div class="form-row">
           <div class="form-group">
-            <label for="inputNotifyThreshold">Notify Above Net %</label>
+            <label for="inputNotifyThreshold">Notify Above Edge %</label>
             <input type="number" id="inputNotifyThreshold" value="2" min="0" max="20" step="0.5">
           </div>
           <div class="form-group">
@@ -309,10 +479,131 @@
             </select>
           </div>
         </div>
+
+        <div class="settings-section-label">Alerts</div>
+        <div class="form-group">
+          <label for="inputDiscordWebhook">Discord Webhook URL</label>
+          <input type="url" id="inputDiscordWebhook" placeholder="https://discord.com/api/webhooks/...">
+          <div class="hint">Get a webhook URL from your Discord channel settings</div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="inputTelegramToken">Telegram Bot Token</label>
+            <input type="password" id="inputTelegramToken" placeholder="123456:ABC-DEF...">
+          </div>
+          <div class="form-group">
+            <label for="inputTelegramChat">Telegram Chat ID</label>
+            <input type="text" id="inputTelegramChat" placeholder="-1001234567890">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="inputAlertMinEdge">Min Edge % for Alerts</label>
+          <input type="number" id="inputAlertMinEdge" value="2" min="0" max="20" step="0.5">
+          <div class="hint">Only send alerts for opportunities above this edge threshold</div>
+        </div>
       </div>
       <div class="modal-footer">
         <button class="btn" id="modalCancel">Cancel</button>
         <button class="btn btn-primary" id="modalSave">Save Config</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ ONBOARDING MODAL ═══ -->
+  <div class="modal-overlay" id="onboardingModal">
+    <div class="modal onboarding-modal">
+      <div class="onboarding-step active" id="onboardStep1">
+        <div class="onboarding-hero">
+          <div class="onboarding-logo">ARBSCANNER</div>
+          <div class="onboarding-tagline">Find mispriced bets across prediction markets and sportsbooks</div>
+        </div>
+        <div class="onboarding-body">
+          <div class="onboarding-feature">
+            <span class="onboarding-icon">1</span>
+            <div><strong>Scan</strong> — Compares odds across Polymarket, Kalshi, and 15+ sportsbooks</div>
+          </div>
+          <div class="onboarding-feature">
+            <span class="onboarding-icon">2</span>
+            <div><strong>Detect</strong> — Finds arbitrage (guaranteed profit) and +EV (positive expected value) opportunities</div>
+          </div>
+          <div class="onboarding-feature">
+            <span class="onboarding-icon">3</span>
+            <div><strong>Act</strong> — Shows exact stakes, Kelly sizing, and step-by-step instructions</div>
+          </div>
+        </div>
+        <button class="btn btn-primary btn-lg" onclick="nextOnboardStep(2)">Get Started</button>
+      </div>
+      <div class="onboarding-step" id="onboardStep2">
+        <h2>Connect your data source</h2>
+        <p class="onboarding-sub">An Odds API key enables sportsbook odds for arbitrage detection. Prediction markets (Polymarket, Kalshi) work without a key.</p>
+        <div class="form-group" style="max-width:400px;margin:0 auto">
+          <label for="onboardApiKey">The Odds API Key</label>
+          <input type="password" id="onboardApiKey" placeholder="Paste your API key here...">
+          <div class="hint">Free at <a href="https://the-odds-api.com" target="_blank" rel="noopener noreferrer">the-odds-api.com</a></div>
+        </div>
+        <div class="onboarding-actions">
+          <button class="btn" onclick="skipOnboarding()">Skip for now</button>
+          <button class="btn btn-primary" onclick="finishOnboarding()">Save &amp; Start Scanning</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ BET LOG MODAL ═══ -->
+  <div class="modal-overlay" id="betLogModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>Log Bet</h2>
+        <button class="modal-close" onclick="closeBetModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="betLogOppId">
+        <div class="form-group">
+          <label for="betLogEvent">Event</label>
+          <input type="text" id="betLogEvent" placeholder="e.g. Lakers @ Celtics — ML">
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="betLogSport">Sport</label>
+            <input type="text" id="betLogSport" placeholder="NBA">
+          </div>
+          <div class="form-group">
+            <label for="betLogPlatform">Platform</label>
+            <input type="text" id="betLogPlatform" placeholder="Polymarket">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="betLogSide">Side / Pick</label>
+            <input type="text" id="betLogSide" placeholder="Lakers Yes">
+          </div>
+          <div class="form-group">
+            <label for="betLogOdds">Odds (American)</label>
+            <input type="number" id="betLogOdds" placeholder="+150">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="betLogStake">Stake ($)</label>
+            <input type="number" id="betLogStake" min="0" step="0.01" placeholder="25.00">
+          </div>
+          <div class="form-group">
+            <label for="betLogType">Bet Type</label>
+            <select id="betLogType">
+              <option value="arb">Arb</option>
+              <option value="ev">+EV</option>
+              <option value="manual">Manual</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="betLogNotes">Notes (optional)</label>
+          <input type="text" id="betLogNotes" placeholder="Edge was 3.2%, half Kelly...">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeBetModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveBet()">Save Bet</button>
       </div>
     </div>
   </div>

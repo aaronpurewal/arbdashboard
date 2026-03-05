@@ -330,6 +330,22 @@ body::after {
 .auto-scan-toggle input:checked ~ .auto-scan-label {
   color: var(--green);
 }
+.auto-scan-toggle.disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.auto-scan-toggle.disabled .auto-scan-slider {
+  pointer-events: none;
+}
+.pro-badge {
+  font-size: 0.5rem;
+  background: var(--text-dim);
+  color: var(--bg-primary);
+  padding: 1px 4px;
+  border-radius: 3px;
+  vertical-align: middle;
+  letter-spacing: 0.06em;
+}
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 .btn {
@@ -1386,6 +1402,18 @@ tr.tier-ev:hover td {
   display: flex;
   flex-direction: column;
   gap: 22px;
+}
+
+.settings-section-label {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  font-weight: 700;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-top: 4px;
 }
 
 .form-group {
@@ -2479,6 +2507,374 @@ tr.tier-ev .step-link:hover {
 @media (max-width: 480px) {
   .learn-section { padding: 20px 16px; }
   .topbar-learn .back-link { font-size: 0.6rem; padding: 5px 10px; }
+}
+
+/* ── Tab Navigation ─────────────────────────────────────────────────────── */
+.tab-bar {
+  display: flex;
+  gap: 2px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-md);
+  padding: 3px;
+  width: fit-content;
+}
+.tab-btn {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 8px 20px;
+  background: transparent;
+  color: var(--text-dim);
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.tab-btn:hover { color: var(--text-secondary); background: var(--bg-tertiary); }
+.tab-btn.active {
+  color: var(--text-bright);
+  background: var(--bg-tertiary);
+  box-shadow: inset 0 0 0 1px var(--border-glass);
+}
+.tab-panel { display: none; }
+.tab-panel.active { display: contents; }
+
+/* ── Track Bet Button ──────────────────────────────────────────────────── */
+.track-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: 1px solid var(--border-glass);
+  background: transparent;
+  color: var(--green);
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+  line-height: 1;
+}
+.track-btn:hover {
+  background: var(--green-bg-strong);
+  border-color: var(--green);
+}
+
+/* ── Journal Tab ───────────────────────────────────────────────────────── */
+.journal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.journal-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  flex: 1;
+}
+.journal-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.journal-actions select {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  padding: 6px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+}
+#journalTable th { font-size: 0.6rem; }
+.bet-status {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 2px 8px;
+  border-radius: 3px;
+}
+.bet-status.open { background: var(--blue-bg); color: var(--blue); border: 1px solid rgba(77,166,255,0.2); }
+.bet-status.won { background: var(--green-bg); color: var(--green); border: 1px solid var(--green-border); }
+.bet-status.lost { background: var(--red-bg); color: var(--red); border: 1px solid var(--red-border); }
+.bet-status.void { background: var(--bg-tertiary); color: var(--text-dim); border: 1px solid var(--border-subtle); }
+.bet-action-btn {
+  font-size: 0.58rem;
+  padding: 3px 8px;
+  border-radius: 3px;
+  border: 1px solid var(--border-glass);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  transition: all 0.15s;
+}
+.bet-action-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.bet-action-btn.resolve { color: var(--green); border-color: var(--green-border); }
+.bet-action-btn.delete { color: var(--red); border-color: var(--red-border); }
+
+/* ── Analytics Tab ─────────────────────────────────────────────────────── */
+.analytics-type-toggle {
+  display: flex;
+  gap: 2px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  width: fit-content;
+  margin-bottom: 8px;
+}
+.analytics-type-btn {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  padding: 5px 14px;
+  background: transparent;
+  color: var(--text-dim);
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.analytics-type-btn:hover { color: var(--text-secondary); }
+.analytics-type-btn.active {
+  color: var(--text-bright);
+  background: var(--bg-tertiary);
+  box-shadow: inset 0 0 0 1px var(--border-glass);
+}
+.analytics-hint {
+  font-size: 0.6rem;
+  color: var(--text-dim);
+  margin-top: 8px;
+  font-style: italic;
+}
+.analytics-card.full-width {
+  grid-column: 1 / -1;
+}
+.tracker-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-bottom: 16px;
+}
+.tracker-col {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+}
+.tracker-label {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.tracker-charts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 12px;
+}
+.tracker-chart-col {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+}
+.tracker-sublabel {
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+@media (max-width: 768px) {
+  .tracker-grid, .tracker-charts { grid-template-columns: 1fr; }
+}
+.analytics-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.analytics-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  padding: 20px;
+}
+.analytics-card h3 {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  margin-bottom: 14px;
+}
+.chart-container {
+  min-height: 160px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.chart-placeholder {
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  text-align: center;
+}
+.analytics-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.analytics-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.72rem;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.analytics-row span:first-child { color: var(--text-secondary); }
+.analytics-row span:last-child { color: var(--text-primary); font-weight: 600; font-family: var(--font-mono); }
+
+/* ── CSS Bar Charts ────────────────────────────────────────────────────── */
+.bar-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 120px;
+  padding-top: 10px;
+  width: 100%;
+}
+.bar-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+  justify-content: flex-end;
+}
+.bar {
+  width: 100%;
+  max-width: 28px;
+  border-radius: 3px 3px 0 0;
+  background: var(--green);
+  opacity: 0.7;
+  transition: height 0.3s, opacity 0.2s;
+  min-height: 2px;
+}
+.bar:hover { opacity: 1; }
+.bar.negative { background: var(--red); }
+.bar-label {
+  font-size: 0.5rem;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+/* ── Cumulative P&L Line Chart (CSS) ───────────────────────────────────── */
+.pnl-chart {
+  position: relative;
+  height: 140px;
+  width: 100%;
+  border-bottom: 1px solid var(--border-subtle);
+  border-left: 1px solid var(--border-subtle);
+}
+.pnl-chart svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* ── Onboarding Modal ──────────────────────────────────────────────────── */
+.onboarding-modal {
+  max-width: 520px;
+  text-align: center;
+}
+.onboarding-step { display: none; }
+.onboarding-step.active { display: block; }
+.onboarding-hero {
+  padding: 30px 20px 20px;
+}
+.onboarding-logo {
+  font-family: var(--font-mono);
+  font-size: 1.8rem;
+  font-weight: 800;
+  letter-spacing: 6px;
+  background: linear-gradient(135deg, var(--green), var(--blue));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.onboarding-tagline {
+  margin-top: 8px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.onboarding-body {
+  padding: 20px 30px;
+  text-align: left;
+}
+.onboarding-feature {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 12px 0;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.onboarding-feature strong { color: var(--text-primary); }
+.onboarding-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--green-bg-strong);
+  border: 1px solid var(--green-border);
+  color: var(--green);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.onboarding-sub {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 8px 0 20px;
+}
+.onboarding-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 24px;
+  padding-bottom: 20px;
+}
+.btn-lg {
+  padding: 12px 36px;
+  font-size: 0.8rem;
+  margin: 20px auto;
+}
+
+@media (max-width: 960px) {
+  .analytics-grid { grid-template-columns: 1fr; }
+  .journal-stats { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 480px) {
+  .journal-stats { grid-template-columns: 1fr 1fr; }
 }
 
 /* ── Print ───────────────────────────────────────────────────────────────── */

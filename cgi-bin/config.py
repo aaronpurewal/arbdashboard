@@ -51,6 +51,10 @@ DEFAULT_CONFIG = {
     "include_live": True,
     "default_bankroll": 100,
     "devig_method": "power",
+    "discord_webhook": "",
+    "telegram_bot_token": "",
+    "telegram_chat_id": "",
+    "alert_min_edge": 2.0,
 }
 
 def main():

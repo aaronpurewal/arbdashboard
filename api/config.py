@@ -21,14 +21,24 @@ class handler(BaseHTTPRequestHandler):
         if env_key:
             config["odds_api_key"] = env_key
 
-        # Mask API keys for display
-        masked = dict(config)
-        for kname in ("odds_api_key", "oddspapi_key"):
-            if masked.get(kname):
-                k = masked[kname]
-                masked[f"{kname}_masked"] = k[:4] + "****" + k[-4:] if len(k) > 8 else "****"
+        # Strip secrets — only send masked versions to the browser
+        safe = dict(config)
+        for kname in ("odds_api_key", "oddspapi_key", "telegram_bot_token"):
+            raw = safe.pop(kname, "")
+            if raw:
+                safe[f"{kname}_masked"] = raw[:4] + "****" + raw[-4:] if len(raw) > 8 else "****"
+                safe[f"has_{kname}"] = True
+            else:
+                safe[f"has_{kname}"] = False
+        # Discord webhook — mask but allow partial display
+        dw = safe.pop("discord_webhook", "")
+        if dw:
+            safe["has_discord_webhook"] = True
+            safe["discord_webhook_masked"] = dw[:40] + "****" if len(dw) > 40 else "****"
+        else:
+            safe["has_discord_webhook"] = False
 
-        body = json.dumps({"config": masked, "timestamp": datetime.now(timezone.utc).isoformat()})
+        body = json.dumps({"config": safe, "timestamp": datetime.now(timezone.utc).isoformat()})
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Access-Control-Allow-Origin', '*')

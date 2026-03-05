@@ -23,7 +23,7 @@ const state = {
   countdownSeconds: 60,
   countdownInterval: null,
   scanInterval: null,
-  autoScanEnabled: true,
+  autoScanEnabled: false,
   sortColumn: "net",
   sortDirection: "desc",
   previousIds: new Set(),
@@ -152,7 +152,7 @@ function escapeHtml(s) {
 
 async function fetchScan(mode = "full") {
   const params = new URLSearchParams();
-  if (state.config.odds_api_key) params.set("api_key", state.config.odds_api_key);
+  // API key stays server-side only (env var or DB) — never sent from browser
   const minPct = parseFloat(document.getElementById("minProfitSlider").value) || 0;
   if (minPct > 0) params.set("min_pct", minPct.toString());
   if (mode === "quick") params.set("mode", "quick");
@@ -503,6 +503,7 @@ function renderTable() {
           </div>
         </td>
         <td>
+          <button class="track-btn" onclick="event.stopPropagation(); trackBet('${opp.id}')" title="Track this bet">+</button>
           <button class="copy-btn" onclick="event.stopPropagation(); copyOpp('${opp.id}')" title="Copy details">⧉</button>
         </td>
       </tr>
@@ -1124,6 +1125,7 @@ async function runScan(forceMode) {
     // Cache for instant display on next visit (only on full scans to avoid thrashing)
     if (!isQuick) {
       try { localStorage.setItem("arbscanner_last_scan", JSON.stringify(data)); } catch (e) { /* quota */ }
+      logScanToHistory(data);
     }
 
   } catch (err) {
@@ -1376,13 +1378,22 @@ function playChime() {
 
 function openSettings() {
   document.getElementById("settingsModal").classList.add("open");
-  // Populate fields
-  document.getElementById("inputOddsApiKey").value = state.config.odds_api_key || "";
-  document.getElementById("inputOddsPapiKey").value = state.config.oddspapi_key || "";
-  document.getElementById("inputRefreshInterval").value = state.config.refresh_interval || 60;
+  // Populate fields — API keys show placeholder if set server-side, blank if not
+  const oddsKeyInput = document.getElementById("inputOddsApiKey");
+  const papiKeyInput = document.getElementById("inputOddsPapiKey");
+  oddsKeyInput.value = "";
+  papiKeyInput.value = "";
+  oddsKeyInput.placeholder = state.config.has_odds_api_key ? (state.config.odds_api_key_masked || "Key saved on server") : "Enter your API key...";
+  papiKeyInput.placeholder = state.config.has_oddspapi_key ? (state.config.oddspapi_key_masked || "Key saved on server") : "Optional unified API key...";
   document.getElementById("inputDefaultBankroll").value = state.config.default_bankroll || 100;
   document.getElementById("inputNotifyThreshold").value = state.config.notify_above_pct || 2;
   document.getElementById("inputSoundAlerts").value = state.config.sound_alerts ? "true" : "false";
+  document.getElementById("inputDevigMethod").value = state.config.devig_method || "power";
+  // Webhook fields
+  document.getElementById("inputDiscordWebhook").value = state.config.discord_webhook || "";
+  document.getElementById("inputTelegramToken").value = state.config.telegram_bot_token || "";
+  document.getElementById("inputTelegramChat").value = state.config.telegram_chat_id || "";
+  document.getElementById("inputAlertMinEdge").value = state.config.alert_min_edge ?? 2;
 }
 
 function closeSettings() {
@@ -1391,19 +1402,24 @@ function closeSettings() {
 
 async function handleSaveSettings() {
   const newConfig = {
-    odds_api_key: document.getElementById("inputOddsApiKey").value.trim(),
-    oddspapi_key: document.getElementById("inputOddsPapiKey").value.trim(),
-    refresh_interval: parseInt(document.getElementById("inputRefreshInterval").value) || 60,
     default_bankroll: parseFloat(document.getElementById("inputDefaultBankroll").value) || 100,
     notify_above_pct: parseFloat(document.getElementById("inputNotifyThreshold").value) || 2,
     sound_alerts: document.getElementById("inputSoundAlerts").value === "true",
+    devig_method: document.getElementById("inputDevigMethod").value,
+    discord_webhook: document.getElementById("inputDiscordWebhook").value.trim(),
+    telegram_bot_token: document.getElementById("inputTelegramToken").value.trim(),
+    telegram_chat_id: document.getElementById("inputTelegramChat").value.trim(),
+    alert_min_edge: parseFloat(document.getElementById("inputAlertMinEdge").value) || 2,
   };
+  // Only send API keys if user typed a new value (not left blank)
+  const oddsKey = document.getElementById("inputOddsApiKey").value.trim();
+  const papiKey = document.getElementById("inputOddsPapiKey").value.trim();
+  if (oddsKey) newConfig.odds_api_key = oddsKey;
+  if (papiKey) newConfig.oddspapi_key = papiKey;
 
   Object.assign(state.config, newConfig);
   await saveConfig(newConfig);
   closeSettings();
-  resetCountdown();
-  startAutoRefresh();
   showToast("Configuration saved");
 
   // Re-scan with new config
@@ -1423,18 +1439,12 @@ function setupEventListeners() {
   // CSV export
   document.getElementById("btnExportCSV").addEventListener("click", exportCSV);
 
-  // Auto-scan toggle
+  // Auto-scan toggle (disabled — Pro feature)
   const autoToggle = document.getElementById("toggleAutoScan");
   if (autoToggle) {
-    autoToggle.addEventListener("change", () => {
-      state.autoScanEnabled = autoToggle.checked;
-      if (autoToggle.checked) {
-        resetCountdown();
-        startAutoRefresh();
-      } else {
-        if (state.countdownInterval) clearInterval(state.countdownInterval);
-        document.getElementById("countdown").textContent = "paused";
-      }
+    autoToggle.closest("label").addEventListener("click", (e) => {
+      e.preventDefault();
+      showToast("Auto-scan is available for Pro users only");
     });
   }
 
@@ -1498,6 +1508,8 @@ function setupEventListeners() {
     if (e.key === "Escape") {
       closeSettings();
       closeSidebar();
+      closeBetModal();
+      document.getElementById("onboardingModal").classList.remove("open");
       if (state.expandedRow) {
         toggleDetail(state.expandedRow);
       }
@@ -1508,11 +1520,619 @@ function setupEventListeners() {
   });
 }
 
+// ─── Tab Navigation ───────────────────────────────────────────────────────────
+
+function setupTabs() {
+  document.querySelectorAll(".tab-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const target = btn.dataset.tab;
+      document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+      document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
+      btn.classList.add("active");
+      const panel = document.getElementById(`tab${target.charAt(0).toUpperCase() + target.slice(1)}`);
+      if (panel) panel.classList.add("active");
+
+      if (target === "journal") loadBets();
+      if (target === "analytics") loadAnalytics();
+    });
+  });
+}
+
+// ─── Onboarding ───────────────────────────────────────────────────────────────
+
+function checkOnboarding() {
+  const seen = localStorage.getItem("arbscanner_onboarded");
+  if (seen) return;
+  if (!state.config.has_odds_api_key) {
+    document.getElementById("onboardingModal").classList.add("open");
+  } else {
+    localStorage.setItem("arbscanner_onboarded", "1");
+  }
+}
+
+function nextOnboardStep(step) {
+  document.querySelectorAll(".onboarding-step").forEach(s => s.classList.remove("active"));
+  document.getElementById(`onboardStep${step}`).classList.add("active");
+}
+
+function skipOnboarding() {
+  localStorage.setItem("arbscanner_onboarded", "1");
+  document.getElementById("onboardingModal").classList.remove("open");
+}
+
+async function finishOnboarding() {
+  const key = document.getElementById("onboardApiKey").value.trim();
+  if (key) {
+    await saveConfig({ odds_api_key: key });
+  }
+  localStorage.setItem("arbscanner_onboarded", "1");
+  document.getElementById("onboardingModal").classList.remove("open");
+  if (key) {
+    showToast("API key saved — running first scan...");
+    runScan("full");
+  }
+}
+
+// ─── Bet Journal ──────────────────────────────────────────────────────────────
+
+let _bets = [];
+
+async function loadBets() {
+  try {
+    const resp = await fetch(`${API_BASE}/bets`);
+    const data = await resp.json();
+    _bets = data.bets || [];
+  } catch (e) {
+    try { _bets = JSON.parse(localStorage.getItem("arbscanner_bets") || "[]"); } catch { _bets = []; }
+  }
+  renderJournal();
+}
+
+function _buildBetRow(b) {
+  const tr = document.createElement("tr");
+  const date = b.created_at ? new Date(b.created_at).toLocaleDateString() : "--";
+
+  const cells = [
+    date,
+    truncate(b.event, 30),
+    b.sport,
+    b.platform,
+    b.side,
+    formatOdds(b.odds),
+    formatMoney(b.stake),
+  ];
+
+  cells.forEach(text => {
+    const td = document.createElement("td");
+    td.textContent = text;
+    tr.appendChild(td);
+  });
+
+  // Status cell
+  const statusTd = document.createElement("td");
+  const badge = document.createElement("span");
+  badge.className = `bet-status ${b.status}`;
+  badge.textContent = b.status.toUpperCase();
+  statusTd.appendChild(badge);
+  tr.appendChild(statusTd);
+
+  // P&L cell
+  const pnlTd = document.createElement("td");
+  pnlTd.textContent = b.status !== "open" ? formatMoney(b.pnl) : "--";
+  if (b.pnl > 0) pnlTd.style.color = "var(--green)";
+  else if (b.pnl < 0) pnlTd.style.color = "var(--red)";
+  tr.appendChild(pnlTd);
+
+  // Action cell
+  const actTd = document.createElement("td");
+  if (b.status === "open") {
+    ["won", "lost", "void"].forEach(outcome => {
+      const btn = document.createElement("button");
+      btn.className = `bet-action-btn${outcome !== "void" ? " resolve" : ""}`;
+      btn.textContent = outcome.charAt(0).toUpperCase() + outcome.slice(1);
+      btn.addEventListener("click", () => resolveBet(b.id, outcome));
+      actTd.appendChild(btn);
+    });
+  } else {
+    const del = document.createElement("button");
+    del.className = "bet-action-btn delete";
+    del.textContent = "Del";
+    del.addEventListener("click", () => deleteBet(b.id));
+    actTd.appendChild(del);
+  }
+  tr.appendChild(actTd);
+  return tr;
+}
+
+function renderJournal() {
+  const filter = document.getElementById("journalFilter").value;
+  const bets = filter === "all" ? _bets : _bets.filter(b => b.status === filter);
+  const tbody = document.getElementById("journalTableBody");
+  const empty = document.getElementById("journalEmpty");
+
+  tbody.replaceChildren();
+  if (bets.length === 0) {
+    empty.style.display = "flex";
+  } else {
+    empty.style.display = "none";
+    bets.forEach(b => tbody.appendChild(_buildBetRow(b)));
+  }
+
+  // Update journal stats
+  const resolved = _bets.filter(b => b.status !== "open");
+  const wins = _bets.filter(b => b.status === "won").length;
+  const totalPnL = resolved.reduce((s, b) => s + (b.pnl || 0), 0);
+  const totalStaked = resolved.reduce((s, b) => s + (b.stake || 0), 0);
+
+  document.getElementById("journalTotalBets").textContent = _bets.length;
+  document.getElementById("journalWinRate").textContent = resolved.length > 0
+    ? (wins / resolved.length * 100).toFixed(0) + "%" : "--%";
+
+  const pnlEl = document.getElementById("journalPnL");
+  pnlEl.textContent = formatMoney(totalPnL);
+  pnlEl.className = `stat-value ${totalPnL > 0 ? "green" : totalPnL < 0 ? "red" : ""}`;
+
+  document.getElementById("journalROI").textContent = totalStaked > 0
+    ? (totalPnL / totalStaked * 100).toFixed(1) + "%" : "--%";
+}
+
+function trackBet(oppId) {
+  const opp = state.filteredOpps.find(o => o.id === oppId);
+  if (!opp) return;
+
+  document.getElementById("betLogOppId").value = oppId;
+  document.getElementById("betLogEvent").value = opp.event_detail || opp.event || "";
+  document.getElementById("betLogSport").value = opp.sport || "";
+  document.getElementById("betLogPlatform").value = opp.platform_a.name || "";
+  document.getElementById("betLogSide").value = opp.platform_a.side || "";
+  document.getElementById("betLogOdds").value = opp.platform_a.american_odds || "";
+  document.getElementById("betLogType").value = opp.type === "ev" ? "ev" : "arb";
+
+  const bankroll = state.config.default_bankroll || 100;
+  if (opp.type === "ev") {
+    const kelly = computeKelly(opp);
+    const fraction = kelly.adaptive > 0 ? kelly.adaptive : (kelly.half > 0 ? kelly.half : 0.05);
+    document.getElementById("betLogStake").value = (fraction * bankroll).toFixed(2);
+  } else {
+    document.getElementById("betLogStake").value = (bankroll * (opp.platform_a.implied_prob || 0.5)).toFixed(2);
+  }
+
+  document.getElementById("betLogNotes").value = "";
+  document.getElementById("betLogModal").classList.add("open");
+}
+
+function closeBetModal() {
+  document.getElementById("betLogModal").classList.remove("open");
+}
+
+async function saveBet() {
+  const bet = {
+    opp_id: document.getElementById("betLogOppId").value,
+    event: document.getElementById("betLogEvent").value,
+    sport: document.getElementById("betLogSport").value,
+    platform: document.getElementById("betLogPlatform").value,
+    side: document.getElementById("betLogSide").value,
+    odds: parseFloat(document.getElementById("betLogOdds").value) || 0,
+    stake: parseFloat(document.getElementById("betLogStake").value) || 0,
+    bet_type: document.getElementById("betLogType").value,
+    notes: document.getElementById("betLogNotes").value,
+    action: "create",
+  };
+
+  try {
+    await fetch(`${API_BASE}/bets`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(bet),
+    });
+  } catch (e) {
+    bet.id = Date.now().toString(36);
+    bet.status = "open";
+    bet.pnl = 0;
+    bet.created_at = new Date().toISOString();
+    const local = JSON.parse(localStorage.getItem("arbscanner_bets") || "[]");
+    local.unshift(bet);
+    localStorage.setItem("arbscanner_bets", JSON.stringify(local));
+  }
+
+  closeBetModal();
+  showToast("Bet tracked");
+  loadBets();
+}
+
+async function resolveBet(id, outcome) {
+  try {
+    await fetch(`${API_BASE}/bets`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "resolve", id, outcome }),
+    });
+  } catch (e) {
+    const local = JSON.parse(localStorage.getItem("arbscanner_bets") || "[]");
+    const bet = local.find(b => b.id === id);
+    if (bet) {
+      bet.status = outcome;
+      const odds = bet.odds || 0;
+      if (outcome === "won") {
+        bet.pnl = odds > 0 ? bet.stake * (odds / 100) : bet.stake * (100 / Math.abs(odds));
+      } else if (outcome === "void") { bet.pnl = 0; }
+      else { bet.pnl = -bet.stake; }
+      bet.resolved_at = new Date().toISOString();
+      localStorage.setItem("arbscanner_bets", JSON.stringify(local));
+    }
+  }
+  loadBets();
+}
+
+async function deleteBet(id) {
+  try {
+    await fetch(`${API_BASE}/bets`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "delete", id }),
+    });
+  } catch (e) {
+    const local = JSON.parse(localStorage.getItem("arbscanner_bets") || "[]");
+    localStorage.setItem("arbscanner_bets", JSON.stringify(local.filter(b => b.id !== id)));
+  }
+  loadBets();
+}
+
+// ─── Analytics ────────────────────────────────────────────────────────────────
+
+let _scanHistory = [];
+
+async function loadAnalytics() {
+  try {
+    const resp = await fetch(`${API_BASE}/bets?endpoint=scan_history`);
+    const data = await resp.json();
+    _scanHistory = data.scan_history || [];
+  } catch (e) {
+    _scanHistory = [];
+  }
+
+  await loadBets();
+  renderAnalytics();
+}
+
+let _analyticsFilter = "all"; // "all", "arb", "ev"
+
+function setupAnalyticsToggle() {
+  document.querySelectorAll(".analytics-type-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".analytics-type-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      _analyticsFilter = btn.dataset.atype;
+      renderAnalytics();
+    });
+  });
+}
+
+function renderAnalytics() {
+  const filter = _analyticsFilter;
+
+  // ── Scan summary stats (separated) ──
+  document.getElementById("analyticsScans").textContent = _scanHistory.length;
+
+  const totalArbs = _scanHistory.reduce((s, h) => s + (h.arb_count || 0), 0);
+  const totalEvs = _scanHistory.reduce((s, h) => s + (h.ev_count || 0), 0);
+  document.getElementById("analyticsArbCount").textContent = totalArbs;
+  document.getElementById("analyticsEvCount").textContent = totalEvs;
+
+  if (_scanHistory.length > 0) {
+    const avgArbs = totalArbs / _scanHistory.length;
+    const avgEvs = totalEvs / _scanHistory.length;
+    document.getElementById("analyticsAvgArbs").textContent = avgArbs.toFixed(1);
+    document.getElementById("analyticsAvgEvs").textContent = avgEvs.toFixed(1);
+
+    // Best edges — we store overall best_edge per scan, but arb/ev split
+    // isn't in the DB schema yet. Use best_edge as proxy for now.
+    const bestEdge = Math.max(..._scanHistory.map(h => h.best_edge || 0));
+    // For arb-specific: scans with arbs likely had arb best_edge
+    const arbScans = _scanHistory.filter(h => h.arb_count > 0);
+    const evScans = _scanHistory.filter(h => h.ev_count > 0);
+    const bestArbEdge = arbScans.length > 0 ? Math.max(...arbScans.map(h => h.best_edge || 0)) : 0;
+    const bestEvEdge = evScans.length > 0 ? Math.max(...evScans.map(h => h.best_edge || 0)) : 0;
+    document.getElementById("analyticsBestArb").textContent = bestArbEdge > 0 ? bestArbEdge.toFixed(1) + "%" : "--%";
+    document.getElementById("analyticsBestEv").textContent = bestEvEdge > 0 ? bestEvEdge.toFixed(1) + "%" : "--%";
+
+    // Most common sport
+    const sportCounts = {};
+    _scanHistory.forEach(h => {
+      (h.sports || "").split(",").filter(Boolean).forEach(s => {
+        sportCounts[s] = (sportCounts[s] || 0) + 1;
+      });
+    });
+    const topSport = Object.entries(sportCounts).sort((a, b) => b[1] - a[1])[0];
+    document.getElementById("analyticsTopSport").textContent = topSport ? topSport[0] : "--";
+
+    // Best hour — filter by type
+    const hourCounts = {};
+    _scanHistory.forEach(h => {
+      let count = h.opp_count;
+      if (filter === "arb") count = h.arb_count || 0;
+      else if (filter === "ev") count = h.ev_count || 0;
+      if (count > 0) {
+        hourCounts[h.hour] = (hourCounts[h.hour] || 0) + count;
+      }
+    });
+    const bestHour = Object.entries(hourCounts).sort((a, b) => b[1] - a[1])[0];
+    if (bestHour) {
+      const h = parseInt(bestHour[0]);
+      const label = h === 0 ? "12 AM" : h < 12 ? `${h} AM` : h === 12 ? "12 PM" : `${h - 12} PM`;
+      document.getElementById("analyticsBestHour").textContent = label;
+    }
+
+    // By-hour chart (filtered)
+    renderBarChart("chartByHour", hourCounts, h => {
+      const hr = parseInt(h);
+      return hr === 0 ? "12a" : hr < 12 ? `${hr}a` : hr === 12 ? "12p" : `${hr - 12}p`;
+    });
+
+    // Edge distribution (filtered by type)
+    const edgeBuckets = { "0-1%": 0, "1-2%": 0, "2-3%": 0, "3-5%": 0, "5%+": 0 };
+    _scanHistory.forEach(h => {
+      // Only count scans relevant to the filter
+      if (filter === "arb" && !h.arb_count) return;
+      if (filter === "ev" && !h.ev_count) return;
+      const e = h.best_edge || 0;
+      if (e < 1) edgeBuckets["0-1%"]++;
+      else if (e < 2) edgeBuckets["1-2%"]++;
+      else if (e < 3) edgeBuckets["2-3%"]++;
+      else if (e < 5) edgeBuckets["3-5%"]++;
+      else edgeBuckets["5%+"]++;
+    });
+    renderBarChart("chartEdgeDist", edgeBuckets);
+  }
+
+  // ── P&L chart from bet journal (filtered by type) ──
+  let resolved = _bets.filter(b => b.status !== "open" && b.resolved_at);
+  if (filter === "arb") resolved = resolved.filter(b => b.bet_type === "arb");
+  else if (filter === "ev") resolved = resolved.filter(b => b.bet_type === "ev");
+
+  const pnlContainer = document.getElementById("chartPnL");
+  if (resolved.length > 1) {
+    resolved.sort((a, b) => new Date(a.resolved_at) - new Date(b.resolved_at));
+    let cumPnL = 0;
+    const points = resolved.map(b => {
+      cumPnL += b.pnl || 0;
+      return { date: b.resolved_at, pnl: cumPnL };
+    });
+    renderPnLChart("chartPnL", points);
+  } else {
+    const ph = document.createElement("div");
+    ph.className = "chart-placeholder";
+    ph.textContent = filter === "all"
+      ? "Track bets in the Journal to see your P&L curve"
+      : `No resolved ${filter === "arb" ? "arb" : "+EV"} bets yet`;
+    pnlContainer.replaceChildren(ph);
+  }
+
+  // ── Journal Performance breakdown ──
+  const arbBets = _bets.filter(b => b.bet_type === "arb");
+  const evBets = _bets.filter(b => b.bet_type === "ev");
+  const arbResolved = arbBets.filter(b => b.status !== "open");
+  const evResolved = evBets.filter(b => b.status !== "open");
+  const arbWins = arbBets.filter(b => b.status === "won").length;
+  const arbLosses = arbBets.filter(b => b.status === "lost").length;
+  const evWins = evBets.filter(b => b.status === "won").length;
+  const evLosses = evBets.filter(b => b.status === "lost").length;
+  const arbPnL = arbResolved.reduce((s, b) => s + (b.pnl || 0), 0);
+  const evPnL = evResolved.reduce((s, b) => s + (b.pnl || 0), 0);
+  const totalStaked = [...arbResolved, ...evResolved].reduce((s, b) => s + (b.stake || 0), 0);
+
+  document.getElementById("perfTotalBets").textContent = _bets.length;
+  document.getElementById("perfArbBets").textContent = `${arbBets.length} (${arbWins}W / ${arbLosses}L)`;
+
+  const arbPnLEl = document.getElementById("perfArbPnL");
+  arbPnLEl.textContent = formatMoney(arbPnL);
+  arbPnLEl.style.color = arbPnL > 0 ? "var(--green)" : arbPnL < 0 ? "var(--red)" : "";
+
+  document.getElementById("perfEvBets").textContent = `${evBets.length} (${evWins}W / ${evLosses}L)`;
+
+  const evPnLEl = document.getElementById("perfEvPnL");
+  evPnLEl.textContent = formatMoney(evPnL);
+  evPnLEl.style.color = evPnL > 0 ? "var(--green)" : evPnL < 0 ? "var(--red)" : "";
+
+  document.getElementById("perfEvWinRate").textContent = evResolved.length > 0
+    ? (evWins / evResolved.length * 100).toFixed(0) + "%" : "--%";
+
+  const totalPnL = arbPnL + evPnL;
+  const roiEl = document.getElementById("perfROI");
+  roiEl.textContent = totalStaked > 0 ? (totalPnL / totalStaked * 100).toFixed(1) + "%" : "--%";
+  roiEl.style.color = totalPnL > 0 ? "var(--green)" : totalPnL < 0 ? "var(--red)" : "";
+
+  // ── Scanner Auto-Tracker Stats ──
+  renderTrackerStats();
+}
+
+function renderTrackerStats() {
+  const tracker = state.meta?.tracker;
+  if (!tracker || !tracker.stats) return;
+
+  const arb = tracker.stats.arb || {};
+  const ev = tracker.stats.ev || {};
+
+  // Arb stats
+  document.getElementById("trackerArbTotal").textContent = arb.total || 0;
+  document.getElementById("trackerArbResolved").textContent = (arb.won || 0) + (arb.lost || 0);
+  const arbPnLEl = document.getElementById("trackerArbPnL");
+  arbPnLEl.textContent = formatMoney(arb.pnl || 0);
+  arbPnLEl.style.color = (arb.pnl || 0) > 0 ? "var(--green)" : (arb.pnl || 0) < 0 ? "var(--red)" : "";
+  const arbResolved = (arb.won || 0) + (arb.lost || 0);
+  document.getElementById("trackerArbAvg").textContent = arbResolved > 0
+    ? formatMoney((arb.pnl || 0) / arbResolved) : "$0.00";
+
+  // EV stats
+  document.getElementById("trackerEvTotal").textContent = ev.total || 0;
+  const evWon = ev.won || 0;
+  const evLost = ev.lost || 0;
+  const evResolved = evWon + evLost;
+  document.getElementById("trackerEvResolved").textContent = `${evResolved} (${evWon}W / ${evLost}L)`;
+  document.getElementById("trackerEvWinRate").textContent = evResolved > 0
+    ? (evWon / evResolved * 100).toFixed(0) + "%" : "--%";
+  const evPnLEl = document.getElementById("trackerEvPnL");
+  evPnLEl.textContent = formatMoney(ev.pnl || 0);
+  evPnLEl.style.color = (ev.pnl || 0) > 0 ? "var(--green)" : (ev.pnl || 0) < 0 ? "var(--red)" : "";
+  document.getElementById("trackerEvPending").textContent = ev.pending || 0;
+
+  // Build cumulative P&L charts from recent resolved bets
+  const recent = tracker.recent || [];
+  if (recent.length > 1) {
+    const arbRecent = recent.filter(r => r.opp_type === "arb").reverse();
+    const evRecent = recent.filter(r => r.opp_type === "ev").reverse();
+
+    if (arbRecent.length > 1) {
+      let cum = 0;
+      const pts = arbRecent.map(r => { cum += r.pnl || 0; return { date: r.resolved_at, pnl: cum }; });
+      renderPnLChart("chartTrackerArb", pts);
+    }
+    if (evRecent.length > 1) {
+      let cum = 0;
+      const pts = evRecent.map(r => { cum += r.pnl || 0; return { date: r.resolved_at, pnl: cum }; });
+      renderPnLChart("chartTrackerEv", pts);
+    }
+  }
+}
+
+function renderBarChart(containerId, dataObj, labelFn) {
+  const container = document.getElementById(containerId);
+  const entries = Object.entries(dataObj);
+  if (entries.length === 0) return;
+
+  const maxVal = Math.max(...entries.map(e => e[1]), 1);
+  const chart = document.createElement("div");
+  chart.className = "bar-chart";
+
+  entries.forEach(([key, val]) => {
+    const label = labelFn ? labelFn(key) : key;
+    const height = Math.max(2, (val / maxVal) * 110);
+    const col = document.createElement("div");
+    col.className = "bar-col";
+
+    const bar = document.createElement("div");
+    bar.className = "bar";
+    bar.style.height = height + "px";
+    bar.title = `${key}: ${val}`;
+
+    const lbl = document.createElement("div");
+    lbl.className = "bar-label";
+    lbl.textContent = label;
+
+    col.appendChild(bar);
+    col.appendChild(lbl);
+    chart.appendChild(col);
+  });
+
+  container.replaceChildren(chart);
+}
+
+function renderPnLChart(containerId, points) {
+  const container = document.getElementById(containerId);
+  if (points.length < 2) return;
+
+  const vals = points.map(p => p.pnl);
+  const minV = Math.min(0, ...vals);
+  const maxV = Math.max(0, ...vals);
+  const range = maxV - minV || 1;
+  const w = 100;
+  const h = 130;
+  const zeroY = h - ((0 - minV) / range) * h;
+
+  const pathPoints = points.map((p, i) => {
+    const x = (i / (points.length - 1)) * w;
+    const y = h - ((p.pnl - minV) / range) * h;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+
+  const color = vals[vals.length - 1] >= 0 ? "var(--green)" : "var(--red)";
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "pnl-chart";
+
+  // SVG for the line chart — data is numeric (not user input), safe for SVG construction
+  const svgNS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(svgNS, "svg");
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  svg.setAttribute("preserveAspectRatio", "none");
+
+  const line = document.createElementNS(svgNS, "line");
+  line.setAttribute("x1", "0"); line.setAttribute("y1", String(zeroY));
+  line.setAttribute("x2", String(w)); line.setAttribute("y2", String(zeroY));
+  line.setAttribute("stroke", "var(--border-subtle)");
+  line.setAttribute("stroke-width", "0.5");
+  line.setAttribute("stroke-dasharray", "2");
+
+  const poly = document.createElementNS(svgNS, "polyline");
+  poly.setAttribute("points", pathPoints);
+  poly.setAttribute("fill", "none");
+  poly.setAttribute("stroke", color);
+  poly.setAttribute("stroke-width", "1.5");
+
+  svg.appendChild(line);
+  svg.appendChild(poly);
+  wrapper.appendChild(svg);
+
+  const label = document.createElement("div");
+  label.style.cssText = `position:absolute;top:4px;right:8px;font-size:0.6rem;color:${color};font-family:var(--font-mono);font-weight:700`;
+  label.textContent = formatMoney(vals[vals.length - 1]);
+  wrapper.appendChild(label);
+
+  container.replaceChildren(wrapper);
+}
+
+// Log scan results for analytics
+async function logScanToHistory(data) {
+  if (!data || !data.opportunities) return;
+  const opps = data.opportunities;
+  const arbs = opps.filter(o => o.type === "arb");
+  const evs = opps.filter(o => o.type === "ev");
+  const edges = opps.map(o => o.ev_pct || o.net_arb_pct || 0);
+  const bestEdge = edges.length > 0 ? Math.max(...edges) : 0;
+  const avgEdge = edges.length > 0 ? edges.reduce((s, e) => s + e, 0) / edges.length : 0;
+  const sports = [...new Set(opps.map(o => o.sport).filter(Boolean))].join(",");
+
+  try {
+    await fetch(`${API_BASE}/bets`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "log_scan",
+        opp_count: opps.length,
+        arb_count: arbs.length,
+        ev_count: evs.length,
+        best_edge: bestEdge,
+        avg_edge: avgEdge,
+        sports,
+      }),
+    });
+  } catch (e) { /* analytics logging is best-effort */ }
+}
+
 // ─── Initialize ───────────────────────────────────────────────────────────────
 
 async function init() {
   restoreFiltersFromStorage();
   setupEventListeners();
+  setupTabs();
+  setupAnalyticsToggle();
+
+  // Journal filter listener
+  const journalFilter = document.getElementById("journalFilter");
+  if (journalFilter) journalFilter.addEventListener("change", renderJournal);
+  const btnManualBet = document.getElementById("btnAddBetManual");
+  if (btnManualBet) btnManualBet.addEventListener("click", () => {
+    document.getElementById("betLogOppId").value = "";
+    document.getElementById("betLogEvent").value = "";
+    document.getElementById("betLogSport").value = "";
+    document.getElementById("betLogPlatform").value = "";
+    document.getElementById("betLogSide").value = "";
+    document.getElementById("betLogOdds").value = "";
+    document.getElementById("betLogStake").value = "";
+    document.getElementById("betLogType").value = "manual";
+    document.getElementById("betLogNotes").value = "";
+    document.getElementById("betLogModal").classList.add("open");
+  });
 
   // Show cached data instantly (stale-while-revalidate)
   const cached = localStorage.getItem("arbscanner_last_scan");
@@ -1531,8 +2151,10 @@ async function init() {
   const scanPromise = runScan("full");
   await configPromise;
 
-  resetCountdown();
-  startAutoRefresh();
+  // Check if onboarding needed (after config loads)
+  checkOnboarding();
+
+  document.getElementById("countdown").textContent = "manual";
 }
 
 // Start

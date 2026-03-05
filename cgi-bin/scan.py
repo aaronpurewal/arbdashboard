@@ -344,7 +344,11 @@ SPORT_CATEGORY_KEYWORDS = {
     "nhl": ["nhl", "hockey", "stanley cup"],
     "soccer": ["soccer", "epl", "mls", "premier league"],
     "mma": ["mma", "ufc"],
+    "boxing": ["boxing", "bout"],
 }
+
+# Sports with 3-way h2h markets (win/draw/lose) — can't arb against binary predictions
+THREE_WAY_SPORTS = {"soccer", "boxing", "mma"}
 
 # Map full team names to sport categories
 TEAM_TO_SPORT = {}
@@ -383,6 +387,81 @@ for t in _nba_teams: TEAM_TO_SPORT[t] = "nba"
 for t in _nfl_teams: TEAM_TO_SPORT[t] = "nfl"
 for t in _mlb_teams: TEAM_TO_SPORT[t] = "mlb"
 for t in _nhl_teams: TEAM_TO_SPORT[t] = "nhl"
+
+def _event_date_bucket(commence_time_str):
+    """Return a date bucket string from a commence_time ISO string.
+
+    Books sometimes list the same event with slightly different times (e.g.
+    7:00 PM vs 7:30 PM). We bucket by ISO date so those merge.  But events
+    months apart (like TBD placeholder dates) stay separate.
+
+    Returns '' if no valid date could be parsed (entries will still group
+    by team names alone, same as before).
+    """
+    if not commence_time_str:
+        return ""
+    try:
+        dt = datetime.fromisoformat(commence_time_str.replace("Z", "+00:00"))
+        return dt.strftime("%Y-%m-%d")
+    except Exception:
+        return ""
+
+
+# Common placeholder dates used by books when the real date is TBD
+_PLACEHOLDER_DATES = {"12-31", "01-01", "12-30"}
+
+
+def _is_placeholder_date(date_bucket):
+    """Return True if this date bucket looks like a TBD placeholder."""
+    if not date_bucket:
+        return False
+    return date_bucket[5:] in _PLACEHOLDER_DATES
+
+
+def _make_event_key(away, home, commence_time_str=""):
+    """Build an event key that includes a date bucket.
+
+    Entries with the same teams on the same calendar day merge.
+    Entries months apart stay separate (prevents TBD date pollution).
+    Placeholder dates (Dec 31, Jan 1) are excluded from the key so they
+    don't form their own isolated group — instead they get dropped during
+    date-conflict detection downstream.
+    """
+    bucket = _event_date_bucket(commence_time_str)
+    if _is_placeholder_date(bucket):
+        bucket = ""  # don't include placeholder in key — let conflict detection handle it
+    base = f"{away}@{home}"
+    return f"{base}|{bucket}" if bucket else base
+
+
+def _display_event_key(event_key):
+    """Strip date bucket from event key for display purposes.
+    'Ciryl Gane@Tom Aspinall|2026-06-28' → 'Ciryl Gane @ Tom Aspinall'
+    """
+    base = event_key.split("|")[0] if "|" in event_key else event_key
+    return base.replace("@", " @ ")
+
+
+def _sport_display_from_entry(entry):
+    """Return a human-friendly sport label from a sportsbook entry."""
+    sport = entry.get("sport", "").replace("_", " ").lower()
+    cat = entry.get("_sport_category", "")
+    if cat == "nba" or "nba" in sport or "basketball" in sport:
+        return "NBA"
+    if cat == "nfl" or "nfl" in sport or "football" in sport:
+        return "NFL"
+    if cat == "mlb" or "mlb" in sport or "baseball" in sport:
+        return "MLB"
+    if cat == "nhl" or "nhl" in sport or "hockey" in sport:
+        return "NHL"
+    if cat == "mma" or "mma" in sport or "mixed martial" in sport:
+        return "MMA"
+    if cat == "boxing" or "boxing" in sport:
+        return "Boxing"
+    if cat == "soccer" or "soccer" in sport or "mls" in sport or "epl" in sport:
+        return "Soccer"
+    return sport[:10].title() if sport else "Sports"
+
 
 def _detect_sport_category(text):
     """Detect sport category from text keywords or team names."""
@@ -479,7 +558,7 @@ def _polymarket_cli_available():
 # Strong keywords: league/sport names — one match is enough
 _STRONG_SPORT_KW = frozenset([
     "nba", "nfl", "mlb", "nhl", "soccer", "football", "basketball",
-    "baseball", "hockey", "mma", "ufc", "tennis",
+    "baseball", "hockey", "mma", "ufc", "tennis", "boxing",
 ])
 # Weak keywords: appear in non-sports contexts — require a strong match too
 _WEAK_SPORT_KW = frozenset([
@@ -1197,8 +1276,8 @@ def find_all_arb_opportunities(prediction_markets, sportsbook_entries, min_net_p
             continue  # futures and 1h_totals can't match sportsbooks
         candidates = [c for c in candidates if c.get("market_type") in allowed_sb_types]
 
-        # Skip soccer h2h — 3-way market (win/draw/lose) can't arb against binary
-        if pred_subtype == "h2h" and pred.get("_sport_category") == "soccer":
+        # Skip 3-way h2h sports (win/draw/lose) — can't arb against binary
+        if pred_subtype == "h2h" and pred.get("_sport_category") in THREE_WAY_SPORTS:
             continue
 
         # For totals/spreads/props, require matching point line
@@ -1325,21 +1404,7 @@ def find_all_arb_opportunities(prediction_markets, sportsbook_entries, min_net_p
                 continue
 
             # Determine sport
-            sport = sb.get("sport", "").replace("_", " ").upper()
-            if "nba" in sport.lower() or "basketball" in sport.lower():
-                sport_display = "NBA"
-            elif "nfl" in sport.lower() or "football" in sport.lower():
-                sport_display = "NFL"
-            elif "mlb" in sport.lower() or "baseball" in sport.lower():
-                sport_display = "MLB"
-            elif "nhl" in sport.lower() or "hockey" in sport.lower():
-                sport_display = "NHL"
-            elif "soccer" in sport.lower() or "mls" in sport.lower() or "epl" in sport.lower():
-                sport_display = "Soccer"
-            elif "mma" in sport.lower() or "ufc" in sport.lower():
-                sport_display = "MMA"
-            else:
-                sport_display = sport[:10] if sport else "Sports"
+            sport_display = _sport_display_from_entry(sb)
 
             stakes = compute_stake_allocation(pred_price, sb_prob, 100)
 
@@ -1795,6 +1860,9 @@ def build_fair_odds_index(sportsbook_entries, devig_method="power"):
 
     now = datetime.now(timezone.utc)
 
+    # Track commence dates per book for date-conflict detection
+    book_commence_dates = {}  # (market_key, bk) → date_bucket
+
     for sb in sportsbook_entries:
         home = sb.get("home_team", "")
         away = sb.get("away_team", "")
@@ -1803,16 +1871,22 @@ def build_fair_odds_index(sportsbook_entries, devig_method="power"):
         point = sb.get("outcome_point")
         prob = sb.get("implied_prob", 0)
         bk = sb.get("bookmaker", "")
+        commence = sb.get("commence_time", "")
 
         if prob <= 0 or prob >= 1:
             continue
 
-        event_key = f"{away}@{home}"
+        event_key = _make_event_key(away, home, commence)
         outcome_key = f"{outcome}|{point}" if point is not None else outcome
         market_key = (event_key, mtype)
 
         market_groups[market_key][bk][outcome_key] = prob
         market_outcomes[market_key].add(outcome_key)
+
+        # Track commence date per book for conflict detection
+        date_bucket = _event_date_bucket(commence)
+        if date_bucket:
+            book_commence_dates[(market_key, bk)] = date_bucket
 
         # Track the most recent last_update for this (market, book)
         lu = sb.get("last_update", "")
@@ -1827,6 +1901,38 @@ def build_fair_odds_index(sportsbook_entries, devig_method="power"):
         all_okeys = sorted(market_outcomes[market_key])
         if len(all_okeys) < 2:
             continue
+
+        # Drop books with conflicting or placeholder dates before devigging.
+        # If books disagree on the event date by >7 days, keep only the majority
+        # date cluster and discard outliers (prevents TBD date pollution).
+        date_counts = defaultdict(list)
+        for bk in book_lines:
+            d = book_commence_dates.get((market_key, bk), "")
+            date_counts[d].append(bk)
+        # Find the largest date cluster (ignoring empty/unknown dates)
+        real_dates = {d: bks for d, bks in date_counts.items() if d and not _is_placeholder_date(d)}
+        if real_dates:
+            majority_date = max(real_dates, key=lambda d: len(real_dates[d]))
+            try:
+                majority_dt = datetime.strptime(majority_date, "%Y-%m-%d")
+            except ValueError:
+                majority_dt = None
+            if majority_dt:
+                excluded_books = set()
+                for d, bks in date_counts.items():
+                    if not d or _is_placeholder_date(d):
+                        excluded_books.update(bks)
+                        continue
+                    try:
+                        d_dt = datetime.strptime(d, "%Y-%m-%d")
+                        if abs((d_dt - majority_dt).days) > 7:
+                            excluded_books.update(bks)
+                    except ValueError:
+                        pass
+                if excluded_books:
+                    book_lines = {bk: v for bk, v in book_lines.items() if bk not in excluded_books}
+                    if not book_lines:
+                        continue
 
         # Devig each book independently, then compute weighted average
         # Only use books that have prices for ALL outcomes in this market
@@ -2115,8 +2221,8 @@ def find_ev_opportunities(prediction_markets, sportsbook_entries, fair_index, mi
             continue
         candidates = [c for c in candidates if c.get("market_type") in allowed_sb_types]
 
-        # Note: soccer h2h is 3-way (home/draw/away) but EV detection still works
-        # because Kalshi's "Will X win?" maps to a single sportsbook outcome.
+        # Note: 3-way sports (soccer/boxing/mma) have draw outcomes but EV detection
+        # still works because Kalshi's "Will X win?" maps to a single sportsbook outcome.
         # Only arb detection needs the 3-way skip (can't cover 3 sides with 2 bets).
 
         # For totals/spreads, require matching point line
@@ -2145,9 +2251,15 @@ def find_ev_opportunities(prediction_markets, sportsbook_entries, fair_index, mi
         home = sb.get("home_team", "")
         away = sb.get("away_team", "")
         mtype = sb.get("market_type", "")
-        event_key = f"{away}@{home}"
+        commence = sb.get("commence_time", "")
+        event_key = _make_event_key(away, home, commence)
 
         fair_probs = fair_index.get((event_key, mtype))
+        if not fair_probs:
+            # Fallback: try without date bucket (covers cases where the
+            # fair_index entry has a different date format)
+            event_key_nodate = f"{away}@{home}"
+            fair_probs = fair_index.get((event_key_nodate, mtype))
         if not fair_probs:
             continue
 
@@ -2282,14 +2394,7 @@ def find_ev_opportunities(prediction_markets, sportsbook_entries, fair_index, mi
             sb_side = sb_outcome
 
         # Sport display
-        sport = sb.get("sport", "").replace("_", " ").upper()
-        if "nba" in sport.lower(): sport_display = "NBA"
-        elif "nfl" in sport.lower(): sport_display = "NFL"
-        elif "mlb" in sport.lower(): sport_display = "MLB"
-        elif "nhl" in sport.lower(): sport_display = "NHL"
-        elif "soccer" in sport.lower() or "mls" in sport.lower() or "epl" in sport.lower(): sport_display = "Soccer"
-        elif "mma" in sport.lower(): sport_display = "MMA"
-        else: sport_display = sport[:10] if sport else "Sports"
+        sport_display = _sport_display_from_entry(sb)
 
         # Time display (is_live and commence already set above)
         time_display = ""
@@ -2397,7 +2502,8 @@ def find_cross_sportsbook_opportunities(sportsbook_entries, fair_index, min_ev_p
         mtype = sb.get("market_type", "")
         outcome = sb.get("outcome_name", "")
         point = sb.get("outcome_point")
-        event_key = f"{away}@{home}"
+        commence = sb.get("commence_time", "")
+        event_key = _make_event_key(away, home, commence)
 
         group_key = (event_key, mtype, point)
         event_groups[group_key][outcome].append(sb)
@@ -2407,8 +2513,49 @@ def find_cross_sportsbook_opportunities(sportsbook_entries, fair_index, min_ev_p
         if len(outcomes) < 2:
             continue
 
-        # ── 3-way market detection (soccer h2h: Home/Draw/Away) ──
-        is_3way = mtype == "h2h" and len(outcomes) >= 3
+        # ── Date-conflict filtering ──
+        # Within this group, drop entries from books whose dates conflict
+        # with the majority (>7 days off or placeholder dates).
+        all_group_entries = [ent for ent_list in outcome_map.values() for ent in ent_list]
+        date_to_books = defaultdict(set)
+        for e in all_group_entries:
+            db_ = _event_date_bucket(e.get("commence_time", ""))
+            if db_:
+                date_to_books[db_].add(e.get("bookmaker", ""))
+        real_dates = {d: bks for d, bks in date_to_books.items() if not _is_placeholder_date(d)}
+        if real_dates:
+            majority_date = max(real_dates, key=lambda d: len(real_dates[d]))
+            try:
+                majority_dt = datetime.strptime(majority_date, "%Y-%m-%d")
+                bad_books = set()
+                for d, bks in date_to_books.items():
+                    if _is_placeholder_date(d):
+                        bad_books.update(bks)
+                        continue
+                    try:
+                        d_dt = datetime.strptime(d, "%Y-%m-%d")
+                        if abs((d_dt - majority_dt).days) > 7:
+                            bad_books.update(bks)
+                    except ValueError:
+                        pass
+                if bad_books:
+                    for oname in list(outcome_map.keys()):
+                        outcome_map[oname] = [e for e in outcome_map[oname]
+                                               if e.get("bookmaker", "") not in bad_books]
+                    outcome_map = {k: v for k, v in outcome_map.items() if v}
+                    outcomes = list(outcome_map.keys())
+                    if len(outcomes) < 2:
+                        continue
+            except ValueError:
+                pass
+
+        # ── 3-way market detection ──
+        # Some sports (soccer, boxing, MMA) have draw outcomes even when the API
+        # only returns 2 sides.  Treat h2h as 3-way for any THREE_WAY_SPORT so we
+        # never build a 2-way arb that ignores the uncovered draw.
+        sample_entry = next(iter(outcome_map.values()))[0]
+        sport_cat = sample_entry.get("_sport_category", "other")
+        is_3way = mtype == "h2h" and (len(outcomes) >= 3 or sport_cat in THREE_WAY_SPORTS)
 
         if is_3way:
             # 3-way arb: find best price for each outcome, check if sum < 1.0
@@ -2455,18 +2602,14 @@ def find_cross_sportsbook_opportunities(sportsbook_entries, fair_index, min_ev_p
                             except Exception:
                                 pass
 
-                        sport = best_a_entry.get("sport", "").replace("_", " ").upper()
-                        if "soccer" in sport.lower() or "mls" in sport.lower() or "epl" in sport.lower():
-                            sport_display = "Soccer"
-                        else:
-                            sport_display = sport[:10] if sport else "Sports"
+                        sport_display = _sport_display_from_entry(best_a_entry)
 
                         opp = {
                             "id": hashlib.md5(f"xsb3-{event_key}-{mtype}-{'|'.join(outcomes[:3])}".encode()).hexdigest()[:12],
                             "type": "arb",
                             "n_sides": 3,
                             "sport": sport_display,
-                            "event": f"{event_key.replace('@', ' @ ')} — ML (3-way)",
+                            "event": f"{_display_event_key(event_key)} — ML (3-way)",
                             "event_detail": f"3-way sportsbook arb: {best_a_entry.get('bookmaker_title', '')} / {best_b_entry.get('bookmaker_title', '')} / {best_c_entry.get('bookmaker_title', '')}",
                             "commence_time": commence,
                             "time_display": time_display,
@@ -2555,14 +2698,14 @@ def find_cross_sportsbook_opportunities(sportsbook_entries, fair_index, min_ev_p
                         except Exception:
                             pass
 
-                    sport_display = "Soccer"
+                    sport_display = _sport_display_from_entry(best)
                     side_label = oname
 
                     opp = {
                         "id": hashlib.md5(f"xev3-{event_key}-{mtype}-{oname}-{best.get('bookmaker','')}".encode()).hexdigest()[:12],
                         "type": "ev",
                         "sport": sport_display,
-                        "event": f"{event_key.replace('@', ' @ ')} — ML (3-way)",
+                        "event": f"{_display_event_key(event_key)} — ML (3-way)",
                         "event_detail": f"+EV: {best.get('bookmaker_title', '')} {side_label} vs consensus fair odds",
                         "commence_time": commence,
                         "time_display": time_display,
@@ -2648,14 +2791,7 @@ def find_cross_sportsbook_opportunities(sportsbook_entries, fair_index, min_ev_p
                         except Exception:
                             pass
 
-                    sport = best_a.get("sport", "").replace("_", " ").upper()
-                    if "nba" in sport.lower(): sport_display = "NBA"
-                    elif "nfl" in sport.lower(): sport_display = "NFL"
-                    elif "mlb" in sport.lower(): sport_display = "MLB"
-                    elif "nhl" in sport.lower(): sport_display = "NHL"
-                    elif "soccer" in sport.lower() or "mls" in sport.lower() or "epl" in sport.lower(): sport_display = "Soccer"
-                    elif "mma" in sport.lower(): sport_display = "MMA"
-                    else: sport_display = sport[:10] if sport else "Sports"
+                    sport_display = _sport_display_from_entry(best_a)
 
                     side_a = outcomes[i]
                     side_b = outcomes[j]
@@ -2673,7 +2809,7 @@ def find_cross_sportsbook_opportunities(sportsbook_entries, fair_index, min_ev_p
                         "id": hashlib.md5(f"xsb-{event_key}-{mtype}-{outcomes[i]}-{outcomes[j]}".encode()).hexdigest()[:12],
                         "type": "arb",
                         "sport": sport_display,
-                        "event": f"{event_key.replace('@', ' @ ')} — {'ML' if mtype == 'h2h' else mtype.replace('_', ' ').title()}",
+                        "event": f"{_display_event_key(event_key)} — {'ML' if mtype == 'h2h' else mtype.replace('_', ' ').title()}",
                         "event_detail": f"Sportsbook arb: {best_a.get('bookmaker_title', '')} vs {best_b.get('bookmaker_title', '')}",
                         "commence_time": commence,
                         "time_display": time_display,
@@ -2800,7 +2936,7 @@ def find_cross_sportsbook_opportunities(sportsbook_entries, fair_index, min_ev_p
                             "id": hashlib.md5(f"xev-{event_key}-{mtype}-{outcome_name}-{best.get('bookmaker','')}".encode()).hexdigest()[:12],
                             "type": "ev",
                             "sport": sport_display,
-                            "event": f"{event_key.replace('@', ' @ ')} — {'ML' if mtype == 'h2h' else mtype.replace('_', ' ').title()}",
+                            "event": f"{_display_event_key(event_key)} — {'ML' if mtype == 'h2h' else mtype.replace('_', ' ').title()}",
                             "event_detail": f"+EV: {best.get('bookmaker_title', '')} {side_label} vs consensus fair odds",
                             "commence_time": commence,
                             "time_display": time_display,
@@ -2859,6 +2995,337 @@ def find_cross_sportsbook_opportunities(sportsbook_entries, fair_index, min_ev_p
             seen[key] = opp
 
     return sorted(seen.values(), key=lambda x: x.get('ev_pct', 0) + x.get('net_arb_pct', 0), reverse=True)
+
+
+# ─── Alert Delivery ──────────────────────────────────────────────────────────
+
+def _send_alerts(db, opportunities):
+    """Send Discord/Telegram alerts for high-edge opportunities."""
+    discord_url = get_config(db, "discord_webhook", "")
+    tg_token = get_config(db, "telegram_bot_token", "")
+    tg_chat = get_config(db, "telegram_chat_id", "")
+    min_edge = float(get_config(db, "alert_min_edge", 2))
+
+    if not discord_url and not tg_token:
+        return
+
+    for opp in opportunities:
+        edge = opp.get("ev_pct", 0) or opp.get("net_arb_pct", 0)
+        if edge < min_edge:
+            continue
+
+        opp_type = "ARB" if opp.get("type") == "arb" else "+EV"
+        msg = (
+            f"**{opp_type} {edge:.1f}%** — {opp.get('event', '?')}\n"
+            f"{opp.get('platform_a', {}).get('name', '?')}: "
+            f"{opp.get('platform_a', {}).get('side', '?')} @ "
+            f"{opp.get('platform_a', {}).get('implied_prob', 0)*100:.0f}%\n"
+            f"{opp.get('platform_b', {}).get('name', '?')}: "
+            f"{opp.get('platform_b', {}).get('side', '?')} @ "
+            f"{opp.get('platform_b', {}).get('implied_prob', 0)*100:.0f}%"
+        )
+
+        if discord_url:
+            try:
+                req = urllib.request.Request(
+                    discord_url,
+                    data=json.dumps({"content": msg}).encode(),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                urllib.request.urlopen(req, timeout=5)
+            except Exception:
+                pass
+
+        if tg_token and tg_chat:
+            try:
+                tg_url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
+                req = urllib.request.Request(
+                    tg_url,
+                    data=json.dumps({
+                        "chat_id": tg_chat,
+                        "text": msg.replace("**", "*"),
+                        "parse_mode": "Markdown",
+                    }).encode(),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                urllib.request.urlopen(req, timeout=5)
+            except Exception:
+                pass
+
+
+# ─── Scanner Auto-Tracking & Resolution ──────────────────────────────────────
+
+# Map display sport back to Odds API sport key for scores lookup
+_SPORT_DISPLAY_TO_KEY = {
+    "NBA": "basketball_nba",
+    "NFL": "americanfootball_nfl",
+    "MLB": "baseball_mlb",
+    "NHL": "icehockey_nhl",
+    "Soccer": "soccer_usa_mls",
+    "MMA": "mma_mixed_martial_arts",
+}
+
+# Estimated game durations (hours) for knowing when to check scores
+_SPORT_DURATION_HOURS = {
+    "NBA": 3, "NFL": 4, "MLB": 4, "NHL": 3, "Soccer": 2, "MMA": 5,
+}
+
+def _ensure_scanner_track_table(db):
+    db.execute("""CREATE TABLE IF NOT EXISTS scanner_track (
+        id TEXT PRIMARY KEY,
+        opp_type TEXT,
+        sport TEXT,
+        sport_key TEXT,
+        event TEXT,
+        event_detail TEXT,
+        commence_time TEXT,
+        platform_a TEXT,
+        side_a TEXT,
+        prob_a REAL,
+        odds_a INTEGER,
+        platform_b TEXT,
+        side_b TEXT,
+        prob_b REAL,
+        odds_b INTEGER,
+        market_type TEXT,
+        edge_pct REAL,
+        hypothetical_stake REAL DEFAULT 100,
+        status TEXT DEFAULT 'pending',
+        pnl REAL DEFAULT 0,
+        created_at TEXT,
+        resolve_after TEXT,
+        resolved_at TEXT
+    )""")
+    db.commit()
+
+
+def _auto_track_opportunities(db, opportunities):
+    """Store new scanner opportunities for automatic tracking."""
+    _ensure_scanner_track_table(db)
+    now = datetime.now(timezone.utc).isoformat()
+
+    for opp in opportunities:
+        opp_id = opp.get("id", "")
+        if not opp_id:
+            continue
+
+        # Skip if already tracked
+        existing = db.execute("SELECT id FROM scanner_track WHERE id=?", [opp_id]).fetchone()
+        if existing:
+            continue
+
+        opp_type = opp.get("type", "arb")
+        sport = opp.get("sport", "")
+        sport_key = _SPORT_DISPLAY_TO_KEY.get(sport, "")
+        commence = opp.get("commence_time", "")
+
+        # Calculate when to check for results
+        duration_h = _SPORT_DURATION_HOURS.get(sport, 4)
+        resolve_after = ""
+        if commence:
+            try:
+                ct = datetime.fromisoformat(commence.replace("Z", "+00:00"))
+                resolve_after = (ct + timedelta(hours=duration_h)).isoformat()
+            except (ValueError, TypeError):
+                pass
+
+        pa = opp.get("platform_a", {})
+        pb = opp.get("platform_b", {})
+        edge = opp.get("ev_pct", 0) or opp.get("net_arb_pct", 0)
+
+        # For arbs: auto-resolve immediately — profit is guaranteed (assuming execution)
+        status = "pending"
+        pnl = 0
+        resolved_at = None
+        if opp_type == "arb":
+            status = "won"
+            pnl = round(edge, 2)  # edge_pct on $100 hypothetical = dollar profit
+            resolved_at = now
+
+        db.execute("""INSERT OR IGNORE INTO scanner_track
+            (id, opp_type, sport, sport_key, event, event_detail,
+             commence_time, platform_a, side_a, prob_a, odds_a,
+             platform_b, side_b, prob_b, odds_b, market_type,
+             edge_pct, hypothetical_stake, status, pnl, created_at,
+             resolve_after, resolved_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            [opp_id, opp_type, sport, sport_key,
+             opp.get("event", ""), opp.get("event_detail", ""),
+             commence, pa.get("name", ""), pa.get("side", ""),
+             pa.get("implied_prob", 0), pa.get("american_odds", 0),
+             pb.get("name", ""), pb.get("side", ""),
+             pb.get("implied_prob", 0), pb.get("american_odds", 0),
+             opp.get("market_type", ""), edge,
+             100, status, pnl, now, resolve_after, resolved_at])
+
+    db.commit()
+
+
+def _resolve_pending_bets(db, api_key):
+    """Check completed events and resolve pending EV bets."""
+    _ensure_scanner_track_table(db)
+    now = datetime.now(timezone.utc)
+
+    # Find bets that should be resolvable (resolve_after has passed)
+    pending = db.execute("""
+        SELECT id, sport_key, event, side_a, commence_time, platform_a
+        FROM scanner_track
+        WHERE status='pending' AND resolve_after != '' AND resolve_after < ?
+        LIMIT 50
+    """, [now.isoformat()]).fetchall()
+
+    if not pending or not api_key:
+        return
+
+    # Group by sport_key to minimize API calls (1 call per sport)
+    by_sport = defaultdict(list)
+    for row in pending:
+        bet_id, sport_key, event, side_a, commence, platform_a = row
+        if sport_key:
+            by_sport[sport_key].append({
+                "id": bet_id, "event": event, "side_a": side_a,
+                "commence": commence, "platform_a": platform_a,
+            })
+
+    for sport_key, bets in by_sport.items():
+        # Fetch completed scores from Odds API
+        scores_url = (
+            f"https://api.the-odds-api.com/v4/sports/{sport_key}/scores?"
+            f"apiKey={api_key}&daysFrom=3"
+        )
+        scores_data = fetch_json(scores_url)
+        if not isinstance(scores_data, list):
+            continue
+
+        # Build lookup: completed events by team names
+        completed = {}
+        for game in scores_data:
+            if not game.get("completed"):
+                continue
+            home = game.get("home_team", "").lower()
+            away = game.get("away_team", "").lower()
+            scores = game.get("scores")
+            if not scores:
+                continue
+            # Determine winner
+            home_score = 0
+            away_score = 0
+            for s in scores:
+                if s.get("name", "").lower() == home:
+                    home_score = int(s.get("score", 0))
+                elif s.get("name", "").lower() == away:
+                    away_score = int(s.get("score", 0))
+            winner = home if home_score > away_score else away if away_score > home_score else "draw"
+            key = f"{away}@{home}"
+            completed[key] = {"winner": winner, "home": home, "away": away,
+                              "home_score": home_score, "away_score": away_score}
+
+        # Match our bets against completed games
+        for bet in bets:
+            event_lower = bet["event"].lower()
+            side_lower = bet["side_a"].lower().replace(" yes", "").strip()
+
+            matched_result = None
+            for key, result in completed.items():
+                # Check if event text contains both team names
+                if result["home"] in event_lower and result["away"] in event_lower:
+                    matched_result = result
+                    break
+                # Also check individual words overlap
+                event_words = set(event_lower.split())
+                home_words = set(result["home"].split())
+                away_words = set(result["away"].split())
+                if len(event_words & home_words) > 0 and len(event_words & away_words) > 0:
+                    matched_result = result
+                    break
+
+            if matched_result is None:
+                # Event not in scores yet — might be delayed. Mark stale after 7 days.
+                try:
+                    ct = datetime.fromisoformat(bet["commence"].replace("Z", "+00:00"))
+                    if (now - ct).days > 7:
+                        db.execute(
+                            "UPDATE scanner_track SET status='void', resolved_at=? WHERE id=?",
+                            [now.isoformat(), bet["id"]])
+                except (ValueError, TypeError):
+                    pass
+                continue
+
+            # Determine if our side won
+            winner = matched_result["winner"]
+            won = False
+            if winner != "draw":
+                # Check if our side matches the winner
+                winner_words = set(winner.split())
+                side_words = set(side_lower.split())
+                won = len(winner_words & side_words) > 0
+
+            # For prediction market bets: "Yes" on team X = that team winning
+            if "yes" in bet["side_a"].lower():
+                # side_a has team name embedded, check if that team won
+                pass  # already handled above
+
+            status = "won" if won else "lost"
+            # Calculate P&L: $100 hypothetical stake
+            stake = 100
+            if won:
+                # Get the stored odds
+                row = db.execute("SELECT odds_a FROM scanner_track WHERE id=?",
+                                 [bet["id"]]).fetchone()
+                odds = row[0] if row else 0
+                if odds > 0:
+                    pnl = round(stake * (odds / 100), 2)
+                elif odds < 0:
+                    pnl = round(stake * (100 / abs(odds)), 2)
+                else:
+                    pnl = 0
+            else:
+                pnl = -stake
+
+            db.execute(
+                "UPDATE scanner_track SET status=?, pnl=?, resolved_at=? WHERE id=?",
+                [status, pnl, now.isoformat(), bet["id"]])
+
+    db.commit()
+
+
+def _get_scanner_track_stats(db):
+    """Return summary stats for the auto-tracker."""
+    _ensure_scanner_track_table(db)
+    rows = db.execute("""
+        SELECT opp_type, status, COUNT(*), SUM(pnl), SUM(hypothetical_stake)
+        FROM scanner_track
+        GROUP BY opp_type, status
+    """).fetchall()
+
+    stats = {
+        "arb": {"total": 0, "won": 0, "lost": 0, "pending": 0, "void": 0, "pnl": 0, "staked": 0},
+        "ev":  {"total": 0, "won": 0, "lost": 0, "pending": 0, "void": 0, "pnl": 0, "staked": 0},
+    }
+    for opp_type, status, count, pnl, staked in rows:
+        bucket = stats.get(opp_type, stats["ev"])
+        bucket["total"] += count
+        bucket[status] = bucket.get(status, 0) + count
+        bucket["pnl"] += pnl or 0
+        if status != "pending":
+            bucket["staked"] += staked or 0
+
+    # Recent tracked bets for charting (last 200)
+    recent = db.execute("""
+        SELECT id, opp_type, sport, event, edge_pct, status, pnl,
+               created_at, resolved_at
+        FROM scanner_track
+        WHERE status != 'pending'
+        ORDER BY resolved_at DESC
+        LIMIT 200
+    """).fetchall()
+    cols = ["id", "opp_type", "sport", "event", "edge_pct", "status", "pnl",
+            "created_at", "resolved_at"]
+    recent_list = [dict(zip(cols, r)) for r in recent]
+
+    return {"stats": stats, "recent": recent_list}
 
 
 # ─── Core scan logic (callable from CGI or Vercel handler) ───────────────────
@@ -2994,6 +3461,34 @@ def run_scan(params):
     arb_count = sum(1 for o in all_opportunities if o.get("type") == "arb")
     ev_count = sum(1 for o in all_opportunities if o.get("type") == "ev")
 
+    # Send alerts (non-blocking — failures are silently ignored)
+    if all_opportunities and scan_mode == "full":
+        try:
+            _send_alerts(db, all_opportunities)
+        except Exception:
+            pass
+
+    # Auto-track all opportunities for performance tracking
+    if all_opportunities:
+        try:
+            _auto_track_opportunities(db, all_opportunities)
+        except Exception:
+            pass
+
+    # Resolve pending EV bets using scores API (only on full scans)
+    if scan_mode == "full" and api_key:
+        try:
+            _resolve_pending_bets(db, api_key)
+        except Exception:
+            pass
+
+    # Get tracker stats for frontend
+    tracker_stats = {}
+    try:
+        tracker_stats = _get_scanner_track_stats(db)
+    except Exception:
+        pass
+
     return {
         "opportunities": all_opportunities,
         "meta": {
@@ -3011,6 +3506,7 @@ def run_scan(params):
             "sportsbook_count": len(sportsbook_entries),
             "odds_api_remaining": _safe_int(get_config(db, "_odds_api_remaining")),
             "odds_api_used": _safe_int(get_config(db, "_odds_api_used")),
+            "tracker": tracker_stats,
         }
     }
 
