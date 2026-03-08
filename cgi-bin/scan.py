@@ -3460,8 +3460,17 @@ def resolve_tracked_bets(api_key, pending_bets):
                 won = len(winner_words & side_words) > 0
 
             status = "won" if won else "lost"
-            stake = 100
+            bankroll = 100
             odds = bet.get("odds_a", 0) or 0
+            kelly = bet.get("kelly", 0) or 0
+            opp_type = bet.get("type", "ev")
+
+            # Stake sizing: Kelly for +EV, proportional for arbs
+            if opp_type == "ev" and kelly > 0:
+                stake = round(bankroll * kelly, 2)  # half-Kelly stake
+            else:
+                stake = bankroll  # fallback
+
             if won:
                 if odds > 0:
                     pnl = round(stake * (odds / 100), 2)
@@ -3470,13 +3479,14 @@ def resolve_tracked_bets(api_key, pending_bets):
                 else:
                     pnl = 0
             else:
-                pnl = -stake
+                pnl = round(-stake, 2)
 
             score_str = f"{matched_result['away_score']}-{matched_result['home_score']}"
             results.append({
                 "key": bet["key"],
                 "status": status,
                 "pnl": pnl,
+                "stake": stake,
                 "score": score_str,
             })
 
@@ -3487,10 +3497,15 @@ def resolve_tracked_bets(api_key, pending_bets):
             if any(r["key"] == bet["key"] for r in results):
                 continue
             edge = bet.get("edge", 0) or 0
+            prob_a = bet.get("prob_a", 0) or 0
+            # Arb stake on side A is bankroll × implied_prob_a
+            arb_stake = round(100 * prob_a, 2) if prob_a > 0 else 100
+            arb_profit = round(arb_stake * (edge / 100), 2)
             results.append({
                 "key": bet["key"],
                 "status": "won",
-                "pnl": round(edge, 2),
+                "pnl": arb_profit,
+                "stake": arb_stake,
                 "score": "arb",
             })
 

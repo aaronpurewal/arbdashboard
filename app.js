@@ -1858,6 +1858,8 @@ async function resolveTrackedBets() {
     commence_time: t.commence_time,
     odds_a: t.odds_a || t.odds || 0,
     edge: t.edge || 0,
+    kelly: t.kelly || 0,
+    prob_a: t.prob_a || 0,
   }));
 
   try {
@@ -1880,6 +1882,7 @@ async function resolveTrackedBets() {
       if (result) {
         t.status = result.status;
         t.pnl = result.pnl;
+        t.stake = result.stake || 0;
         t.score = result.score || "";
         t.resolved_at = new Date().toISOString();
         changed = true;
@@ -2161,10 +2164,15 @@ function renderTrackerLog(tracked) {
     const edge = t.edge ? `${t.edge.toFixed(1)}%` : "--";
     const eventShort = (t.event || "").length > 30 ? t.event.substring(0, 28) + "..." : (t.event || "--");
 
-    // P&L display
+    // P&L display — show stake context for resolved bets
     const pnl = t.pnl || 0;
-    const pnlStr = status === "pending" ? "--"
-      : `<span style="color:${pnl >= 0 ? 'var(--green)' : 'var(--red)'};font-weight:600">${formatMoney(pnl)}</span>`;
+    const stake = t.stake || 0;
+    let pnlStr = "--";
+    if (status !== "pending") {
+      const pnlColor = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+      const stakeNote = stake > 0 ? `<div style="font-size:0.5rem;color:var(--text-dim)">on ${formatMoney(stake)}</div>` : "";
+      pnlStr = `<span style="color:${pnlColor};font-weight:600">${formatMoney(pnl)}</span>${stakeNote}`;
+    }
 
     // Score display in event tooltip
     const scoreInfo = t.score && t.score !== "arb" ? ` (${t.score})` : "";
@@ -2211,8 +2219,36 @@ function updateTrackerStatus(key, newStatus) {
     const entry = tracked.find(t => t.key === key);
     if (entry) {
       entry.status = newStatus;
+      entry.resolved_at = new Date().toISOString();
+
+      // Recalculate P&L based on Kelly stake
+      const bankroll = 100;
+      const kelly = entry.kelly || 0;
+      const odds = entry.odds_a || 0;
+      const isEV = entry.type === "ev";
+
+      // Determine stake
+      let stake = bankroll;
+      if (isEV && kelly > 0) {
+        stake = Math.round(bankroll * kelly * 100) / 100;
+      } else if (entry.type === "arb" && entry.prob_a > 0) {
+        stake = Math.round(bankroll * entry.prob_a * 100) / 100;
+      }
+      entry.stake = stake;
+
+      if (newStatus === "won") {
+        if (odds > 0) entry.pnl = Math.round(stake * (odds / 100) * 100) / 100;
+        else if (odds < 0) entry.pnl = Math.round(stake * (100 / Math.abs(odds)) * 100) / 100;
+        else entry.pnl = 0;
+      } else if (newStatus === "lost") {
+        entry.pnl = -stake;
+      } else {
+        entry.pnl = 0;
+        entry.stake = 0;
+      }
+
       localStorage.setItem(LS_TRACKER_OPPS, JSON.stringify(tracked));
-      renderTrackerStats(); // re-render stats + log
+      renderTrackerStats();
     }
   } catch (e) { /* ignore */ }
 }
@@ -2356,6 +2392,8 @@ function logScanToHistory(data) {
           odds_a: opp.platform_a?.american_odds || 0,
           odds_b: opp.platform_b?.american_odds || 0,
           edge: opp.net_arb_pct || opp.ev_pct || 0,
+          kelly: opp.kelly_fraction || 0,  // half-Kelly fraction of bankroll
+          prob_a: opp.platform_a?.implied_prob || 0, // for arb stake sizing
           fair_prob: opp.fair_prob || null,
           found_at: now,
           commence_time: opp.commence_time || "",
