@@ -253,7 +253,7 @@ TEAM_ALIASES = {
     "aston villa": "aston villa", "nottingham": "nottingham forest",
     "fulham": "fulham", "brentford": "brentford",
     "brighton": "brighton", "crystal palace": "crystal palace",
-    "wolves": "wolverhampton", "everton": "everton",
+    "wolverhampton wanderers": "wolverhampton", "everton": "everton",
     "west ham": "west ham", "bournemouth": "bournemouth",
     "leicester": "leicester city", "southampton": "southampton",
     "ipswich": "ipswich town",
@@ -276,14 +276,26 @@ def normalize_name(name):
             name = name.replace(alias, full)
     return name.strip()
 
-def extract_teams_from_text(text):
-    """Extract potential team names from market text."""
+def extract_teams_from_text(text, sport_category=None):
+    """Extract potential team names from market text.
+
+    When sport_category is provided, filters results to only include teams
+    from that sport.  Teams whose sport is unknown (not in TEAM_TO_SPORT)
+    are kept regardless so that newer leagues aren't silently dropped.
+    Falls back to the unfiltered list if filtering removes everything.
+    """
     text = text.lower()
     found = []
     for alias, full in TEAM_ALIASES.items():
         if alias in text:
             if full not in found:
                 found.append(full)
+    if sport_category and found:
+        sport_filtered = [t for t in found
+                          if TEAM_TO_SPORT.get(t) is None
+                          or TEAM_TO_SPORT.get(t) == sport_category]
+        if sport_filtered:
+            return sport_filtered
     return found
 
 def similarity_score(a, b):
@@ -388,10 +400,15 @@ _nhl_teams = {"boston bruins", "toronto maple leafs", "edmonton oilers", "colora
     "new jersey devils", "winnipeg jets", "vegas golden knights",
     "florida panthers", "new york rangers", "montreal canadiens",
     "los angeles kings", "st louis blues"}
+_soccer_teams = {"liverpool", "manchester city", "manchester united", "arsenal",
+    "chelsea", "tottenham", "aston villa", "nottingham forest", "fulham", "brentford",
+    "brighton", "crystal palace", "wolverhampton", "everton", "west ham", "bournemouth",
+    "leicester city", "southampton", "ipswich town"}
 for t in _nba_teams: TEAM_TO_SPORT[t] = "nba"
 for t in _nfl_teams: TEAM_TO_SPORT[t] = "nfl"
 for t in _mlb_teams: TEAM_TO_SPORT[t] = "mlb"
 for t in _nhl_teams: TEAM_TO_SPORT[t] = "nhl"
+for t in _soccer_teams: TEAM_TO_SPORT[t] = "soccer"
 
 def _event_date_bucket(commence_time_str):
     """Return a date bucket string from a commence_time ISO string.
@@ -468,18 +485,37 @@ def _sport_display_from_entry(entry):
     return sport[:10].title() if sport else "Sports"
 
 
-def _detect_sport_category(text):
-    """Detect sport category from text keywords or team names."""
+def _detect_sport_from_keywords(text):
+    """Detect sport category from keywords only (no team-name fallback)."""
     text_lower = text.lower()
     for category, keywords in SPORT_CATEGORY_KEYWORDS.items():
         if any(kw in text_lower for kw in keywords):
             return category
-    # Fall back to team name detection
-    teams = extract_teams_from_text(text)
-    for team in teams:
-        if team in TEAM_TO_SPORT:
-            return TEAM_TO_SPORT[team]
     return None
+
+
+def _detect_sport_category(text):
+    """Detect sport category from text keywords or team names.
+
+    Uses keyword matching first (reliable), then falls back to majority-vote
+    across extracted team names to avoid single-alias misclassification
+    (e.g. 'Denver' alone defaulting to NBA when the context is NFL).
+    """
+    kw_sport = _detect_sport_from_keywords(text)
+    if kw_sport:
+        return kw_sport
+    # Fall back to team name detection with majority vote
+    teams = extract_teams_from_text(text)
+    if not teams:
+        return None
+    sport_votes = {}
+    for team in teams:
+        s = TEAM_TO_SPORT.get(team)
+        if s:
+            sport_votes[s] = sport_votes.get(s, 0) + 1
+    if not sport_votes:
+        return None
+    return max(sport_votes, key=sport_votes.get)
 
 # ─── Market subtype classification ───────────────────────────────────────────
 
@@ -699,6 +735,10 @@ def fetch_polymarket_sports(db=None):
                 except (ValueError, TypeError):
                     prices.append(0)
 
+            # Detect sport from keywords first, then extract sport-filtered teams
+            sport_cat = _detect_sport_category(question)
+            teams = extract_teams_from_text(question, sport_category=sport_cat)
+
             entry = {
                 "source": "polymarket",
                 "id": m.get("conditionId") or m.get("condition_id") or m.get("id", ""),
@@ -711,9 +751,9 @@ def fetch_polymarket_sports(db=None):
                 "volume": m.get("volume", 0),
                 "liquidity": m.get("liquidity", 0),
                 "slug": m.get("slug", ""),
-                "teams": extract_teams_from_text(question),
+                "teams": teams,
                 "_tokens": set(normalize_name(question + " " + (m.get("description", "") or "")).split()),
-                "_sport_category": _detect_sport_category(question),
+                "_sport_category": sport_cat,
                 "_market_subtype": _infer_market_subtype(question),
                 "url": f"https://polymarket.com/event/{m.get('slug', '')}" if m.get('slug') else "",
             }
@@ -877,7 +917,7 @@ def fetch_kalshi_sports(db=None):
                 "liquidity": m.get("open_interest", 0),
                 "ticker": m.get("ticker", ""),
                 "event_ticker": m.get("event_ticker", ""),
-                "teams": extract_teams_from_text(title),
+                "teams": extract_teams_from_text(title, sport_category=category),
                 "_tokens": set(normalize_name(title + " " + no_sub).split()),
                 "_sport_category": category,
                 "_market_subtype": SERIES_MARKET_SUBTYPE.get(series_ticker, "unknown"),
@@ -1037,7 +1077,7 @@ def fetch_sportsbook_odds(db=None, api_key=""):
                             "implied_prob": imp_prob,
                             "decimal_odds": american_to_decimal(price) if price != 0 else 0,
                             "is_prop": is_prop,
-                            "teams": extract_teams_from_text(home + " " + away),
+                            "teams": extract_teams_from_text(home + " " + away, sport_category=SPORT_KEY_TO_CATEGORY.get(sport_key)),
                             "_tokens": set(normalize_name(away + " " + home + " " + name).split()),
                             "_sport_category": SPORT_KEY_TO_CATEGORY.get(sport_key, "other"),
                             "event_name": f"{away} @ {home}",
@@ -1569,6 +1609,12 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
             if not _dates_compatible(pm_date, km_date, max_days=2):
                 continue  # wrong date — skip
 
+            # Sport category check — prevent cross-sport matching
+            pm_sport = pm.get("_sport_category")
+            km_sport = km.get("_sport_category")
+            if pm_sport and km_sport and pm_sport != km_sport:
+                continue  # different sports — skip
+
             # Match by teams and text
             team_overlap = len(set(pm_teams) & set(km_teams))
 
@@ -1627,8 +1673,27 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
                     diff_aligned = abs(pm_yes - km_yes)
                     diff_misaligned = abs(pm_yes - km_no)
                     aligned = (diff_aligned <= diff_misaligned)
+            elif pm_subtype == "h2h":
+                # For h2h, use team name matching to determine side alignment.
+                # Price proximity fails near 50/50 and can put both legs on the
+                # same outcome, creating phantom arbs.
+                # Kalshi _no_sub_title = the team YES represents.
+                km_yes_team = km.get("_no_sub_title", "").strip()
+                if km_yes_team and pm_teams:
+                    km_yes_norm = normalize_name(km_yes_team)
+                    km_yes_tokens = set(km_yes_norm.split()) - {"fc", "city", "united", "the", "de", "la"}
+                    # Check if Kalshi YES team appears in Polymarket question
+                    pm_text_norm = normalize_name(pm.get("question", ""))
+                    pm_text_tokens = set(pm_text_norm.split())
+                    # aligned = PM YES and KM YES refer to the same team
+                    aligned = bool(km_yes_tokens & pm_text_tokens)
+                else:
+                    # No team label — fall back to price proximity
+                    diff_aligned = abs(pm_yes - km_yes)
+                    diff_misaligned = abs(pm_yes - km_no)
+                    aligned = (diff_aligned <= diff_misaligned)
             else:
-                # Price proximity for h2h / unknown
+                # Spreads and other types: price proximity heuristic
                 diff_aligned = abs(pm_yes - km_yes)
                 diff_misaligned = abs(pm_yes - km_no)
                 aligned = (diff_aligned <= diff_misaligned)
