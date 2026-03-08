@@ -1830,6 +1830,66 @@ async function loadAnalytics() {
 
   await loadBets();
   renderAnalytics();
+
+  // Resolve pending bets in background
+  resolveTrackedBets();
+}
+
+async function resolveTrackedBets() {
+  let tracked = [];
+  try {
+    tracked = JSON.parse(localStorage.getItem(LS_TRACKER_OPPS) || "[]");
+  } catch (e) { return; }
+
+  const pending = tracked.filter(t => !t.status || t.status === "pending");
+  if (pending.length === 0) return;
+
+  // Get API key
+  const apiKey = state.config.odds_api_key || "";
+  if (!apiKey) return;
+
+  // Send pending bets to resolve endpoint
+  const payload = pending.map(t => ({
+    key: t.key,
+    type: t.type,
+    event: t.event,
+    side_a: t.side_a || t.side || "",
+    sport: t.sport,
+    commence_time: t.commence_time,
+    odds_a: t.odds_a || t.odds || 0,
+    edge: t.edge || 0,
+  }));
+
+  try {
+    const headers = { "Content-Type": "application/json" };
+    if (apiKey) headers["X-Odds-Api-Key"] = apiKey;
+    const resp = await fetch(`${API_BASE}/resolve`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ pending: payload }),
+    });
+    const data = await resp.json();
+    const resolved = data.resolved || [];
+    if (resolved.length === 0) return;
+
+    // Update localStorage with resolved statuses
+    const resolveMap = new Map(resolved.map(r => [r.key, r]));
+    let changed = false;
+    for (const t of tracked) {
+      const result = resolveMap.get(t.key);
+      if (result) {
+        t.status = result.status;
+        t.pnl = result.pnl;
+        t.score = result.score || "";
+        t.resolved_at = new Date().toISOString();
+        changed = true;
+      }
+    }
+    if (changed) {
+      localStorage.setItem(LS_TRACKER_OPPS, JSON.stringify(tracked));
+      renderTrackerStats(); // refresh the display
+    }
+  } catch (e) { /* best-effort */ }
 }
 
 let _analyticsFilter = "all"; // "all", "arb", "ev"
@@ -2002,30 +2062,31 @@ function renderTrackerStats() {
   const arbWon = arbOpps.filter(a => a.status === "won").length;
   const arbLost = arbOpps.filter(a => a.status === "lost").length;
   const arbPending = arbOpps.filter(a => !a.status || a.status === "pending").length;
+  const arbTotalPnL = arbOpps.reduce((s, a) => s + (a.pnl || 0), 0);
   document.getElementById("trackerArbTotal").textContent = arbOpps.length;
-  const bestArbEdge = arbOpps.length > 0 ? Math.max(...arbOpps.map(a => a.edge || 0)) : 0;
-  document.getElementById("trackerArbResolved").textContent = bestArbEdge > 0
-    ? `${bestArbEdge.toFixed(1)}%` : "--";
-  document.getElementById("trackerArbPnL").textContent =
+  document.getElementById("trackerArbResolved").textContent =
     `${arbWon}W / ${arbLost}L / ${arbPending}P`;
-  document.getElementById("trackerArbPnL").style.color = "";
-  document.getElementById("trackerArbAvg").textContent = bestArbEdge > 0
-    ? `${bestArbEdge.toFixed(1)}%` : "--";
+  const arbPnLEl = document.getElementById("trackerArbPnL");
+  arbPnLEl.textContent = formatMoney(arbTotalPnL);
+  arbPnLEl.style.color = arbTotalPnL > 0 ? "var(--green)" : arbTotalPnL < 0 ? "var(--red)" : "";
+  const arbResolved = arbWon + arbLost;
+  document.getElementById("trackerArbAvg").textContent = arbResolved > 0
+    ? formatMoney(arbTotalPnL / arbResolved) : "$0.00";
 
   // EV stats
   const evWon = evOpps.filter(e => e.status === "won").length;
   const evLost = evOpps.filter(e => e.status === "lost").length;
   const evPending = evOpps.filter(e => !e.status || e.status === "pending").length;
+  const evTotalPnL = evOpps.reduce((s, e) => s + (e.pnl || 0), 0);
+  const evResolved = evWon + evLost;
   document.getElementById("trackerEvTotal").textContent = evOpps.length;
-  const bestEvEdge = evOpps.length > 0 ? Math.max(...evOpps.map(e => e.edge || 0)) : 0;
-  const avgEvEdge = evOpps.length > 0 ? evOpps.reduce((s, e) => s + (e.edge || 0), 0) / evOpps.length : 0;
-  document.getElementById("trackerEvResolved").textContent = avgEvEdge > 0
-    ? `${avgEvEdge.toFixed(1)}%` : "--";
-  document.getElementById("trackerEvWinRate").textContent = bestEvEdge > 0
-    ? `${bestEvEdge.toFixed(1)}%` : "--%";
-  document.getElementById("trackerEvPnL").textContent =
+  document.getElementById("trackerEvResolved").textContent =
     `${evWon}W / ${evLost}L / ${evPending}P`;
-  document.getElementById("trackerEvPnL").style.color = "";
+  document.getElementById("trackerEvWinRate").textContent = evResolved > 0
+    ? `${(evWon / evResolved * 100).toFixed(0)}%` : "--%";
+  const evPnLEl = document.getElementById("trackerEvPnL");
+  evPnLEl.textContent = formatMoney(evTotalPnL);
+  evPnLEl.style.color = evTotalPnL > 0 ? "var(--green)" : evTotalPnL < 0 ? "var(--red)" : "";
   document.getElementById("trackerEvPending").textContent = evPending;
 
   // Show tracking start date
@@ -2034,16 +2095,18 @@ function renderTrackerStats() {
     sinceEl.textContent = "Tracking since March 5, 2026 5:00 PM EST";
   }
 
-  // Edge over time chart (arb)
-  if (arbOpps.length > 1) {
+  // Cumulative P&L chart (arb) — only resolved bets
+  const arbResOps = arbOpps.filter(a => a.status === "won" || a.status === "lost");
+  if (arbResOps.length > 1) {
     let cum = 0;
-    const pts = arbOpps.map(r => { cum += r.edge || 0; return { date: r.found_at, pnl: cum }; });
+    const pts = arbResOps.map(r => { cum += r.pnl || 0; return { date: r.resolved_at || r.found_at, pnl: cum }; });
     renderPnLChart("chartTrackerArb", pts);
   }
-  // Edge over time chart (ev)
-  if (evOpps.length > 1) {
+  // Cumulative P&L chart (ev) — only resolved bets
+  const evResOps = evOpps.filter(e => e.status === "won" || e.status === "lost");
+  if (evResOps.length > 1) {
     let cum = 0;
-    const pts = evOpps.map(r => { cum += r.edge || 0; return { date: r.found_at, pnl: cum }; });
+    const pts = evResOps.map(r => { cum += r.pnl || 0; return { date: r.resolved_at || r.found_at, pnl: cum }; });
     renderPnLChart("chartTrackerEv", pts);
   }
 
@@ -2073,7 +2136,7 @@ function renderTrackerLog(tracked) {
     <thead><tr>
       <th>Type</th><th>Sport</th><th>Event</th><th>Side</th>
       <th>Book</th><th>Odds</th><th>Edge</th><th>Date</th>
-      <th>Found</th><th>Status</th><th></th>
+      <th>Found</th><th>Status</th><th>P&amp;L</th><th></th>
     </tr></thead><tbody>`;
 
   for (const t of sorted) {
@@ -2098,13 +2161,21 @@ function renderTrackerLog(tracked) {
     const edge = t.edge ? `${t.edge.toFixed(1)}%` : "--";
     const eventShort = (t.event || "").length > 30 ? t.event.substring(0, 28) + "..." : (t.event || "--");
 
+    // P&L display
+    const pnl = t.pnl || 0;
+    const pnlStr = status === "pending" ? "--"
+      : `<span style="color:${pnl >= 0 ? 'var(--green)' : 'var(--red)'};font-weight:600">${formatMoney(pnl)}</span>`;
+
+    // Score display in event tooltip
+    const scoreInfo = t.score && t.score !== "arb" ? ` (${t.score})` : "";
+
     // Encode the key for use in onclick
     const safeKey = escapeHtml(t.key).replace(/'/g, "\\'");
 
     html += `<tr>
       <td>${typeBadge}</td>
       <td style="font-size:0.6rem">${escapeHtml(t.sport || "")}</td>
-      <td title="${escapeHtml(t.event || "")}" style="white-space:normal;max-width:160px">${escapeHtml(eventShort)}</td>
+      <td title="${escapeHtml((t.event || "") + scoreInfo)}" style="white-space:normal;max-width:160px">${escapeHtml(eventShort)}${scoreInfo ? `<div style="font-size:0.55rem;color:var(--text-dim)">${escapeHtml(scoreInfo)}</div>` : ""}</td>
       <td style="font-weight:600">${escapeHtml(side)}</td>
       <td>${escapeHtml(book)}</td>
       <td class="odds-cell">${odds}</td>
@@ -2112,6 +2183,7 @@ function renderTrackerLog(tracked) {
       <td>${eventDate}</td>
       <td style="color:var(--text-dim)">${foundDate}</td>
       <td>${statusBadge}</td>
+      <td>${pnlStr}</td>
       <td>
         <select class="tracker-status-select" data-key="${safeKey}" style="font-size:0.55rem;padding:1px 3px;background:var(--bg-secondary);color:var(--text-secondary);border:1px solid var(--border-subtle);border-radius:3px">
           <option value="pending" ${status === "pending" ? "selected" : ""}>Pending</option>

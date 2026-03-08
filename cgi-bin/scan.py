@@ -3346,6 +3346,157 @@ def _get_scanner_track_stats(db):
     return {"stats": stats, "recent": recent_list}
 
 
+def resolve_tracked_bets(api_key, pending_bets):
+    """Resolve pending bets from the frontend using the Odds API scores endpoint.
+
+    Args:
+        api_key: The Odds API key
+        pending_bets: List of dicts with keys: key, event, side_a, sport,
+                      commence_time, odds_a, type
+
+    Returns:
+        List of dicts with keys: key, status, pnl
+    """
+    if not api_key or not pending_bets:
+        return []
+
+    now = datetime.now(timezone.utc)
+    results = []
+
+    # Group by sport for efficient API calls
+    by_sport = defaultdict(list)
+    for bet in pending_bets:
+        sport = bet.get("sport", "")
+        sport_key = _SPORT_DISPLAY_TO_KEY.get(sport, "")
+        if not sport_key:
+            continue
+
+        # Only check bets whose event time has passed + estimated game duration
+        commence = bet.get("commence_time", "")
+        if commence:
+            try:
+                ct = datetime.fromisoformat(commence.replace("Z", "+00:00"))
+                duration_h = _SPORT_DURATION_HOURS.get(sport, 4)
+                if now < ct + timedelta(hours=duration_h):
+                    continue  # game probably not over yet
+            except (ValueError, TypeError):
+                pass
+
+        by_sport[sport_key].append(bet)
+
+    for sport_key, bets in by_sport.items():
+        # Fetch completed scores
+        scores_url = (
+            f"https://api.the-odds-api.com/v4/sports/{sport_key}/scores?"
+            f"apiKey={api_key}&daysFrom=3"
+        )
+        scores_data = fetch_json(scores_url)
+        if not isinstance(scores_data, list):
+            continue
+
+        # Build completed-game lookup
+        completed = {}
+        for game in scores_data:
+            if not game.get("completed"):
+                continue
+            home = game.get("home_team", "").lower()
+            away = game.get("away_team", "").lower()
+            scores = game.get("scores")
+            if not scores:
+                continue
+            home_score = 0
+            away_score = 0
+            for s in scores:
+                if s.get("name", "").lower() == home:
+                    home_score = int(s.get("score", 0))
+                elif s.get("name", "").lower() == away:
+                    away_score = int(s.get("score", 0))
+            winner = home if home_score > away_score else away if away_score > home_score else "draw"
+            completed[f"{away}@{home}"] = {
+                "winner": winner, "home": home, "away": away,
+                "home_score": home_score, "away_score": away_score,
+            }
+
+        # Match bets against completed games
+        for bet in bets:
+            event_lower = (bet.get("event", "") or "").lower()
+            side_lower = (bet.get("side_a", "") or "").lower().replace(" yes", "").strip()
+
+            matched_result = None
+            for _key, result in completed.items():
+                if result["home"] in event_lower and result["away"] in event_lower:
+                    matched_result = result
+                    break
+                event_words = set(event_lower.split())
+                home_words = set(result["home"].split())
+                away_words = set(result["away"].split())
+                if len(event_words & home_words) > 0 and len(event_words & away_words) > 0:
+                    matched_result = result
+                    break
+
+            if matched_result is None:
+                # Void stale bets (>7 days past commence)
+                commence = bet.get("commence_time", "")
+                if commence:
+                    try:
+                        ct = datetime.fromisoformat(commence.replace("Z", "+00:00"))
+                        if (now - ct).days > 7:
+                            results.append({
+                                "key": bet["key"],
+                                "status": "void",
+                                "pnl": 0,
+                                "score": "",
+                            })
+                    except (ValueError, TypeError):
+                        pass
+                continue
+
+            # Determine if our side won
+            winner = matched_result["winner"]
+            won = False
+            if winner != "draw":
+                winner_words = set(winner.split())
+                side_words = set(side_lower.split())
+                won = len(winner_words & side_words) > 0
+
+            status = "won" if won else "lost"
+            stake = 100
+            odds = bet.get("odds_a", 0) or 0
+            if won:
+                if odds > 0:
+                    pnl = round(stake * (odds / 100), 2)
+                elif odds < 0:
+                    pnl = round(stake * (100 / abs(odds)), 2)
+                else:
+                    pnl = 0
+            else:
+                pnl = -stake
+
+            score_str = f"{matched_result['away_score']}-{matched_result['home_score']}"
+            results.append({
+                "key": bet["key"],
+                "status": status,
+                "pnl": pnl,
+                "score": score_str,
+            })
+
+    # Auto-resolve arbs as won (guaranteed profit)
+    for bet in pending_bets:
+        if bet.get("type") == "arb":
+            # Check if already in results
+            if any(r["key"] == bet["key"] for r in results):
+                continue
+            edge = bet.get("edge", 0) or 0
+            results.append({
+                "key": bet["key"],
+                "status": "won",
+                "pnl": round(edge, 2),
+                "score": "arb",
+            })
+
+    return results
+
+
 # ─── Core scan logic (callable from CGI or Vercel handler) ───────────────────
 
 def run_scan(params):
