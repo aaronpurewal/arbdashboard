@@ -904,6 +904,7 @@ def fetch_kalshi_sports(db=None):
             # Use floor_strike for point line (totals/spreads/props)
             floor_strike = m.get("floor_strike")
             no_sub = m.get("no_sub_title", "") or ""
+            yes_sub = m.get("yes_sub_title", "") or ""
 
             entry = {
                 "source": "kalshi",
@@ -923,6 +924,7 @@ def fetch_kalshi_sports(db=None):
                 "_market_subtype": SERIES_MARKET_SUBTYPE.get(series_ticker, "unknown"),
                 "_floor_strike": float(floor_strike) if floor_strike is not None else None,
                 "_no_sub_title": no_sub,
+                "_yes_sub_title": yes_sub,
                 "url": _kalshi_build_url(m.get("ticker", ""), series_ticker, m.get("event_ticker", "")),
             }
             results.append(entry)
@@ -1375,16 +1377,27 @@ def find_all_arb_opportunities(prediction_markets, sportsbook_entries, min_net_p
                 # For h2h, use team name matching instead of price proximity.
                 # Price proximity fails near 50/50 and creates phantom arbs
                 # where both legs bet the same outcome.
-                # _no_sub_title = the team this Kalshi sub-market is about (= YES team)
-                yes_team_label = pred.get("_no_sub_title", "").strip()
+                #
+                # Prefer _yes_sub_title (the YES team) when available.
+                # Fall back to _no_sub_title (the NO team) with inverted logic.
+                yes_team_label = pred.get("_yes_sub_title", "").strip()
+                no_team_label = pred.get("_no_sub_title", "").strip()
                 sb_outcome_name = sb.get("outcome_name", "").strip()
                 if yes_team_label and sb_outcome_name:
+                    # Direct YES-team comparison
                     yes_tokens = set(normalize_name(yes_team_label).split())
                     sb_tokens = set(normalize_name(sb_outcome_name).split())
                     overlap = yes_tokens & sb_tokens
-                    # Remove generic tokens that could cause false matches
                     overlap -= {"fc", "city", "united", "the", "de", "la"}
                     sb_same_as_yes = len(overlap) > 0
+                elif no_team_label and sb_outcome_name:
+                    # Use NO-team label (inverted): if sb matches the NO team,
+                    # then sb is on the NO side → sb_same_as_yes = False
+                    no_tokens = set(normalize_name(no_team_label).split())
+                    sb_tokens = set(normalize_name(sb_outcome_name).split())
+                    overlap = no_tokens & sb_tokens
+                    overlap -= {"fc", "city", "united", "the", "de", "la"}
+                    sb_same_as_yes = len(overlap) == 0
                 else:
                     # No team label — fall back to price proximity
                     diff_yes = abs(yes_price - sb_prob)
@@ -1423,20 +1436,30 @@ def find_all_arb_opportunities(prediction_markets, sportsbook_entries, min_net_p
 
             # Translate Yes/No into meaningful labels
             pred_line = pred.get("_floor_strike")
+            yes_sub = pred.get("_yes_sub_title", "")
             no_sub = pred.get("_no_sub_title", "")
             if pred_subtype == "totals" and pred_line is not None:
                 pred_side = f"Over {pred_line}" if pred_side_raw == "Yes" else f"Under {pred_line}"
-            elif pred_subtype == "h2h" and no_sub:
-                # no_sub_title has the YES team name (e.g., "Sacramento", "Phoenix")
-                yes_team = no_sub.strip()
-                if pred_side_raw == "Yes":
-                    pred_side = yes_team
-                else:
-                    # NO = the other team — find it from teams list
+            elif pred_subtype == "h2h" and (yes_sub or no_sub):
+                # Use yes_sub_title / no_sub_title for human-readable side labels
+                if pred_side_raw == "Yes" and yes_sub:
+                    pred_side = yes_sub.strip()
+                elif pred_side_raw == "No" and no_sub:
+                    pred_side = no_sub.strip()
+                elif pred_side_raw == "Yes" and no_sub:
+                    # YES = the team NOT in no_sub_title
                     pred_teams_list = pred.get("teams", [])
-                    other = [t for t in pred_teams_list
-                             if yes_team.lower() not in t]
-                    pred_side = other[0].title() if other else f"Not {yes_team}"
+                    no_team = no_sub.strip().lower()
+                    other = [t for t in pred_teams_list if no_team not in t]
+                    pred_side = other[0].title() if other else "Yes"
+                elif pred_side_raw == "No" and yes_sub:
+                    # NO = the team NOT in yes_sub_title
+                    pred_teams_list = pred.get("teams", [])
+                    yes_team = yes_sub.strip().lower()
+                    other = [t for t in pred_teams_list if yes_team not in t]
+                    pred_side = other[0].title() if other else "No"
+                else:
+                    pred_side = pred_side_raw
             else:
                 pred_side = pred_side_raw
             sb_price_display = sb.get("american_odds", 0)
@@ -1677,16 +1700,24 @@ def find_cross_prediction_arbs(poly_markets, kalshi_markets, min_net_pct=-999):
                 # For h2h, use team name matching to determine side alignment.
                 # Price proximity fails near 50/50 and can put both legs on the
                 # same outcome, creating phantom arbs.
-                # Kalshi _no_sub_title = the team YES represents.
-                km_yes_team = km.get("_no_sub_title", "").strip()
+                #
+                # Prefer _yes_sub_title (the YES team) when available.
+                # Fall back to _no_sub_title (the NO team) with inverted logic.
+                km_yes_team = km.get("_yes_sub_title", "").strip()
+                km_no_team = km.get("_no_sub_title", "").strip()
+                pm_text_norm = normalize_name(pm.get("question", ""))
+                pm_text_tokens = set(pm_text_norm.split())
+                generic = {"fc", "city", "united", "the", "de", "la"}
                 if km_yes_team and pm_teams:
-                    km_yes_norm = normalize_name(km_yes_team)
-                    km_yes_tokens = set(km_yes_norm.split()) - {"fc", "city", "united", "the", "de", "la"}
-                    # Check if Kalshi YES team appears in Polymarket question
-                    pm_text_norm = normalize_name(pm.get("question", ""))
-                    pm_text_tokens = set(pm_text_norm.split())
+                    km_yes_tokens = set(normalize_name(km_yes_team).split()) - generic
                     # aligned = PM YES and KM YES refer to the same team
                     aligned = bool(km_yes_tokens & pm_text_tokens)
+                elif km_no_team and pm_teams:
+                    km_no_tokens = set(normalize_name(km_no_team).split()) - generic
+                    # If KM NO team appears in PM question text, PM YES is
+                    # likely about that team too → but KM NO is the OTHER side,
+                    # so they are NOT aligned (PM YES ≈ KM NO)
+                    aligned = not bool(km_no_tokens & pm_text_tokens)
                 else:
                     # No team label — fall back to price proximity
                     diff_aligned = abs(pm_yes - km_yes)
@@ -2355,7 +2386,9 @@ def find_ev_opportunities(prediction_markets, sportsbook_entries, fair_index, mi
                 diff_no = abs(no_price - sb_prob)
                 sb_same_as_yes = (diff_yes <= diff_no)
         elif pred_subtype == "h2h":
-            yes_team_label = pred.get("_no_sub_title", "").strip()
+            # Prefer _yes_sub_title (YES team), fall back to _no_sub_title (NO team)
+            yes_team_label = pred.get("_yes_sub_title", "").strip()
+            no_team_label = pred.get("_no_sub_title", "").strip()
             sb_outcome_name = sb.get("outcome_name", "").strip()
             if yes_team_label and sb_outcome_name:
                 yes_tokens = set(normalize_name(yes_team_label).split())
@@ -2363,6 +2396,13 @@ def find_ev_opportunities(prediction_markets, sportsbook_entries, fair_index, mi
                 overlap = yes_tokens & sb_tokens
                 overlap -= {"fc", "city", "united", "the", "de", "la"}
                 sb_same_as_yes = len(overlap) > 0
+            elif no_team_label and sb_outcome_name:
+                no_tokens = set(normalize_name(no_team_label).split())
+                sb_tokens = set(normalize_name(sb_outcome_name).split())
+                overlap = no_tokens & sb_tokens
+                overlap -= {"fc", "city", "united", "the", "de", "la"}
+                # sb matches NO team → sb is NOT same as YES
+                sb_same_as_yes = len(overlap) == 0
             else:
                 diff_yes = abs(yes_price - sb_prob)
                 diff_no = abs(no_price - sb_prob)
@@ -2441,17 +2481,28 @@ def find_ev_opportunities(prediction_markets, sportsbook_entries, fair_index, mi
 
         # Build side labels
         pred_line = pred.get("_floor_strike")
+        yes_sub = pred.get("_yes_sub_title", "")
         no_sub = pred.get("_no_sub_title", "")
         if pred_subtype == "totals" and pred_line is not None:
             pred_side = f"Over {pred_line}" if pred_side_raw == "Yes" else f"Under {pred_line}"
-        elif pred_subtype == "h2h" and no_sub:
-            yes_team = no_sub.strip()
-            if pred_side_raw == "Yes":
-                pred_side = yes_team
-            else:
+        elif pred_subtype == "h2h" and (yes_sub or no_sub):
+            # Use yes/no sub_titles for human-readable side labels
+            if pred_side_raw == "Yes" and yes_sub:
+                pred_side = yes_sub.strip()
+            elif pred_side_raw == "No" and no_sub:
+                pred_side = no_sub.strip()
+            elif pred_side_raw == "Yes" and no_sub:
                 pred_teams_list = pred.get("teams", [])
-                other = [t for t in pred_teams_list if yes_team.lower() not in t]
-                pred_side = other[0].title() if other else f"Not {yes_team}"
+                no_team = no_sub.strip().lower()
+                other = [t for t in pred_teams_list if no_team not in t]
+                pred_side = other[0].title() if other else "Yes"
+            elif pred_side_raw == "No" and yes_sub:
+                pred_teams_list = pred.get("teams", [])
+                yes_team = yes_sub.strip().lower()
+                other = [t for t in pred_teams_list if yes_team not in t]
+                pred_side = other[0].title() if other else "No"
+            else:
+                pred_side = pred_side_raw
         else:
             pred_side = pred_side_raw
 
